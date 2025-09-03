@@ -108,6 +108,7 @@ namespace PT200Emulator.Core
 
             sb.Length--; // ta bort sista ~
             sb.Append("\x1B\\");
+            Logger.Log($"[DCS-OUT] {BitConverter.ToString(Encoding.ASCII.GetBytes(sb.ToString()))}", Logger.LogLevel.Debug);
             return sb.ToString();
         }
 

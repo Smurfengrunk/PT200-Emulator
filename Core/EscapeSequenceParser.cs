@@ -84,6 +84,11 @@ public class EscapeSequenceParser
 
     public void Feed(char ch)
     {
+        // I början av Feed:
+        if (ch < 0x20 || ch == 0x7F) // kontrolltecken + DEL
+        {
+            Logger.Log($"[CTRL-IN] 0x{(int)ch:X2} ({(int)ch})", Logger.LogLevel.Debug);
+        }
         // Lägg till i recentText för att kunna matcha längre fraser
         recentText.Append(ch);
         if (recentText.Length > 100)
@@ -95,11 +100,14 @@ public class EscapeSequenceParser
         {
             EmacsMode = true;
             Logger.Log("[MODE] EMACS mode ON", Logger.LogLevel.Debug);
-        }
 
+            // Forcerad XON för att väcka EMACS direkt
+            _ = tcpClient.SendAsync("\x11"); // XON
+            Logger.Log("[CTRL-OUT] XON (0x11) skickad vid EMACS-start", Logger.LogLevel.Debug);
+        }
         if (EmacsMode &&
-            (recentText.ToString().Contains("OK,") ||
-             recentText.ToString().Contains("ER!")))
+            (recentText.ToString().Contains("OK,", StringComparison.OrdinalIgnoreCase) ||
+             recentText.ToString().Contains("ER!", StringComparison.OrdinalIgnoreCase)))
         {
             EmacsMode = false;
             Logger.Log("[MODE] EMACS mode OFF", Logger.LogLevel.Debug);
@@ -184,7 +192,19 @@ public class EscapeSequenceParser
                 }
                 else
                 {
-                    HandleText(ch);
+                    // Före HandleText-anropet
+                    char mapped = usingG1 ? MapFromG1(ch, g1Charset) : MapFromG0(ch, g0Charset);
+
+                    // Logga bara när det är intressant (bank = G1 eller mappningen ändrade tecknet)
+                    if (usingG1 || mapped != ch)
+                    {
+                        Logger.Log(
+                            $"[TEXT] ({screenBuffer.CursorRow},{screenBuffer.CursorCol}) bank={(usingG1 ? "G1" : "G0")} in=0x{(int)ch:X2} out=0x{(int)mapped:X2}",
+                            Logger.LogLevel.Debug
+                        );
+                    }
+
+                    HandleText(mapped);
                 }
                 break;
 
@@ -368,21 +388,12 @@ public class EscapeSequenceParser
 
             case ParseState.Dcs:
                 seqCharCount++;
-                if (seqCharCount > 32) { /* failsafe */ }
-
-                if (dcsBuffer.Count == 0)
+                if (seqCharCount > 32) // eller annan rimlig gräns
                 {
-                    dcsStartTime = DateTime.Now;
-                    Logger.Log($"[DCS] Startar vid {dcsStartTime:HH:mm:ss.fff}", Logger.LogLevel.Debug);
-                }
-
-                if (DateTime.Now - dcsStartTime > DcsTimeout)
-                {
-                    Logger.Log("[DCS] Timeout – avbryter", Logger.LogLevel.Debug);
+                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
                     ChangeState(ParseState.Normal);
-                    return;
+                    seqCharCount = 0;
                 }
-
                 if (ch == 0x1B) ChangeState(ParseState.DcsEsc);
                 else dcsBuffer.Add((byte)ch);
 
@@ -409,6 +420,7 @@ public class EscapeSequenceParser
                     else
                     {
                         // Kör din tolkning här:
+                        Logger.Log($"[DCS] Payload: {BitConverter.ToString(bytes)}", Logger.LogLevel.Debug);
                         ParseDcsPayload(bytes); // ← viktig
                     }
 
@@ -427,64 +439,6 @@ public class EscapeSequenceParser
         _ = csiStartTime;
     }
 
-    private void HandleDcs(byte[] data)
-    {
-        if (data.Length == 0)
-        {
-            Logger.Log("[DCS] Tom DCS – statusförfrågan", Logger.LogLevel.Debug);
-            terminalState.DumpDcsDebug();
-
-            var reply = terminalState.GenerateDCSResponse();
-            _ = tcpClient.SendAsync(reply);
-            Logger.Log($"[DCS] Skickade status: {BitConverter.ToString(Encoding.ASCII.GetBytes(reply))}", Logger.LogLevel.Debug);
-
-            // Skicka “ready-signal” direkt efter status
-            _ = tcpClient.SendAsync("\x11"); // XON som vissa hostar tolkar som “redo”
-            //_ = tcpClient.SendAsync("\r");  // alternativt CR
-            //_ = tcpClient.SendAsync("\x11"); // ENQ som vissa hostar tolkar som “redo”
-
-            return;
-        }
-
-        Logger.Log($"[DCS] Mottog DCS-sekvens (ASCII): {Encoding.ASCII.GetString(data)}", Logger.LogLevel.Debug);
-        Logger.Log($"[DCS] Mottog DCS-sekvens (HEX): {BitConverter.ToString(data)}", Logger.LogLevel.Debug);
-    }
-
-    private void HandleEscSequence(string seq)
-    {
-        //Logger.Log($"[ESC RAW] {seq}", Logger.LogLevel.Debug);
-
-
-        // Primary DA: ESC [ c
-        if (seq == "[c")
-        {
-            var reply = "\x1B[?62;1;2c"; // PT200 ID
-            _ = tcpClient.SendAsync(reply);
-            Logger.Log($"[DA] Skickade Primary DA-svar: {reply}", Logger.LogLevel.Debug);
-        }
-
-        // Secondary DA: ESC [ > c
-        else if (seq == "[>c" || seq.StartsWith("[>"))
-        {
-            var reply = "\x1B[>1;10;0c"; // exempelvärden
-            _ = tcpClient.SendAsync(reply);
-            Logger.Log($"[DA] Skickade Secondary DA-svar: {reply}", Logger.LogLevel.Debug);
-        }
-
-        // Identify Terminal: ESC Z
-        else if (seq == "Z")
-        {
-            var reply = "\x1B/Z";
-            _ = tcpClient.SendAsync(reply);
-            Logger.Log($"[ID] Skickade identifikationssvar: {reply}", Logger.LogLevel.Debug);
-        }
-
-        // PT200-specifika sekvenser som ESC ` och ESC $ O
-        else if (seq == "`" || seq == "$O")
-        {
-            Logger.Log($"[ESC] Ignorerar PT200-specifik sekvens: ESC {seq}", Logger.LogLevel.Debug);
-        }
-    }
     private void AdvanceLine()
     {
         screenBuffer.CursorRow++;
@@ -560,6 +514,7 @@ public class EscapeSequenceParser
 
     private void HandleCSI(string csi)
     {
+        Logger.Log($"[HandleCSI] {csi}", LogLevel.Debug);
         char command = csi[^1];
         string paramString = csi.Length > 1 ? csi[..^1] : string.Empty;
         string[] parts = string.IsNullOrEmpty(paramString)
@@ -685,6 +640,7 @@ public class EscapeSequenceParser
 
     internal void ParseDcsPayload(byte[] data)
     {
+        Logger.Log($"[DCS-IN] {BitConverter.ToString(data)}", Logger.LogLevel.Debug);
         Logger.LogHex(data, data.Length, "DCS Payload");
         Logger.Log($"[DCS] Payload-längd: {data.Length}", LogLevel.Info);
         if (data.Length == 0)
@@ -752,5 +708,20 @@ public class EscapeSequenceParser
         screenBuffer.SetCursorPosition(0, 0);
         screenBuffer.ResetAttributes();
         // Återställ ev. färger, scrollregioner, wrap-mode etc.
+    }
+
+    private char MapFromG0(char ch, string charset)
+    {
+        // Här kan du lägga in mappningstabell för G0 om det behövs
+        // Just nu: returnera tecknet oförändrat
+        return ch;
+    }
+
+     private char MapFromG1(char ch, string charset)
+    {
+        if (charset == "Graphics" && g1Map.TryGetValue((byte)ch, out var mapped))
+            return mapped;
+
+        return ch;
     }
 }
