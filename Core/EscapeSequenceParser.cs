@@ -3,6 +3,7 @@ using PT200Emulator.Models;
 using PT200Emulator.Util;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -15,7 +16,7 @@ public class EscapeSequenceParser
 {
     public event Action<byte[]> OutgoingDcs;
 
-    private enum ParseState { Normal, Esc, Csi, Pt200Dollar, Pt200ZeroSymbol, Pt200ZeroHex, Dcs, DcsEsc, G0Select, EscDollar }
+    private enum ParseState { Normal, Esc, Csi, Pt200ZeroSymbol, Pt200ZeroHex, Dcs, DcsEsc, G0Select, EscDollar }
 
     private ParseState state = ParseState.Normal;
     private StringBuilder csiBuffer = new StringBuilder();
@@ -83,28 +84,26 @@ public class EscapeSequenceParser
 
     public void Feed(char ch)
     {
-        // När CSI startar
-        csiStartTime = DateTime.Now;
-
-        // När DCS startar
-        dcsStartTime = DateTime.Now;
-
         // Lägg till i recentText för att kunna matcha längre fraser
         recentText.Append(ch);
         if (recentText.Length > 100)
             recentText.Remove(0, recentText.Length - 100);
 
-        if (!EmacsMode && recentText.ToString().Contains("EMACS") || recentText.ToString().Contains("Emacs Standard User Interface"))
+        if (!EmacsMode && (recentText.ToString().IndexOf("emacs", StringComparison.OrdinalIgnoreCase) >= 0))
         {
             EmacsMode = true;
             Logger.Log("[MODE] EMACS mode ON", Logger.LogLevel.Debug);
+            // ChangeState(ParseState.Normal); // frivilligt
         }
 
-        if (EmacsMode && (recentText.ToString().Contains("OK,")) || (recentText.ToString().Contains("ER!")))
+        if (EmacsMode && (
+            recentText.ToString().IndexOf("OK,", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            recentText.ToString().IndexOf("ER!", StringComparison.OrdinalIgnoreCase) >= 0
+        ))
         {
             EmacsMode = false;
             Logger.Log("[MODE] EMACS mode OFF", Logger.LogLevel.Debug);
-            ChangeState(ParseState.Normal); // säkerställ att parsern är i rent läge
+            ChangeState(ParseState.Normal);
         }
 
         if (!EmacsMode && state != ParseState.Normal)
@@ -132,17 +131,10 @@ public class EscapeSequenceParser
         switch (ch)
         {
             // Logga SO/SI
-            case (char)0x0E: // SO – Shift Out (G1)
-                {
-                    if (inCommandMode)
-                    {
-                        Logger.Log("[Block] Ignorerar SO (Shift Out) i kommandoläge", Logger.LogLevel.Debug);
-                        return;
-                    }
-                    usingG1 = true;
-                    Logger.Log("[SO] Shift Out – växlar till G1", Logger.LogLevel.Debug);
-                    break;
-                }
+            case (char)0x0E:
+                usingG1 = true; Logger.Log("[SO] G1 aktiv", LogLevel.Debug);
+                break;
+
             case (char)0x0F: // SI – Shift In (G0)
                 {
                     usingG1 = false;
@@ -218,7 +210,7 @@ public class EscapeSequenceParser
                         break;
                     case '$':
                         Logger.Log("[ESC] Dollar-sekvens start", Logger.LogLevel.Debug);
-                        ChangeState(ParseState.Normal);
+                        ChangeState(ParseState.EscDollar); // ← ändra från Normal till EscDollar
                         break;
                     case '[':
                         csiBuffer.Clear();
@@ -288,37 +280,6 @@ public class EscapeSequenceParser
                 ChangeState(ParseState.Normal);
                 break;
 
-            case ParseState.Pt200Dollar:
-                seqCharCount++;
-                if (seqCharCount > 32) // eller annan rimlig gräns
-                {
-                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
-                    seqCharCount = 0;
-                }
-                if (ch == 'G')
-                {
-                    if (inCommandMode)
-                    {
-                        Logger.Log("[Mode] Lämnar kommandoläge – ESC $G från EMACS", Logger.LogLevel.Debug);
-                        inCommandMode = false;
-                    }
-                    g1Charset = "Graphics";
-                    usingG1 = true;
-                    Logger.Log("[Charset] G1 satt till Graphics via ESC $G", Logger.LogLevel.Debug);
-                }
-                else if (ch == 'B')
-                {
-                    g0Charset = "ASCII";
-                    Logger.Log("[Charset] G0 satt till ASCII via ESC $B", Logger.LogLevel.Debug);
-                }
-                else
-                {
-                    Logger.Log($"[Charset] Okänd $‑sekvens: 0x{(int)ch:X2}", Logger.LogLevel.Debug);
-                }
-                ChangeState(ParseState.Normal);
-                break;
-
             case ParseState.Pt200ZeroSymbol:
                 seqCharCount++;
                 if (seqCharCount > 32) // eller annan rimlig gräns
@@ -366,14 +327,20 @@ public class EscapeSequenceParser
                 break;
 
             case ParseState.EscDollar:
-                if (ch == 'O')
+                if (ch == 'O' || ch == 'G')
                 {
-                    Logger.Log("[ESC] Ladda PT200-grafik i G1", Logger.LogLevel.Debug);
+                    Logger.Log($"[ESC $ {ch}] Ladda PT200-grafik i G1", Logger.LogLevel.Debug);
                     g1Charset = "Graphics";
+                    // usingG1 styrs av SO (0x0E), det är okej. Om du vill forca: usingG1 = true;
+                }
+                else if (ch == 'B')
+                {
+                    g0Charset = "ASCII";
+                    Logger.Log("[ESC $ B] G0 = ASCII", Logger.LogLevel.Debug);
                 }
                 else
                 {
-                    Logger.Log($"[ESC] Okänd $‑sekvens: {ch}", Logger.LogLevel.Debug);
+                    Logger.Log($"[ESC $] Okänd sekvens: {ch}", Logger.LogLevel.Debug);
                 }
                 ChangeState(ParseState.Normal);
                 break;
@@ -385,44 +352,12 @@ public class EscapeSequenceParser
                     ChangeState(ParseState.Normal);
                     seqCharCount = 0;
                 }
-                HandleEscSequence(csiBuffer.ToString());
 
                 if (char.IsLetter(ch))
                 {
                     csiBuffer.Append(ch);
                     string seq = csiBuffer.ToString();
-
-                    // Kolla om det är en kursorrörelse
-                    if ("ABCDHf".Contains(ch))
-                    {
-                        Logger.Log($"[CSI] Ignorerar kursorrörelse: ESC[{seq}", Logger.LogLevel.Debug);
-                        // Gör inget – hoppa över positioneringskommandot
-                    }
-                    else if (seq == "c") // Primary DA
-                    {
-                        // PT200 svar – exempel: ESC[?62;1;2c
-                        var response = "\x1B[?62;1;2c";
-                        _ = tcpClient.SendAsync(response); // starta asynkront, vänta inte
-                        Logger.Log($"[DA] Skickade Primary DA-svar: {response}", Logger.LogLevel.Debug);
-                        return;
-                    }
-                    else if (seq == ">0c")
-                    {
-                        var reply = "\x1B[>1;10;0c"; // Exempelvärden
-                        _ = tcpClient.SendAsync(reply);
-                        Logger.Log($"[DA] Skickade Secondary DA-svar: {reply}", Logger.LogLevel.Debug);
-                    }
-                    else if (ch == 'Z')
-                    {
-                        var reply = "\x1B/Z"; // PT200 kan svara med sin ID-sträng här
-                        _ = tcpClient.SendAsync(reply);
-                        Logger.Log($"[ID] Skickade identifikationssvar: {reply}", Logger.LogLevel.Debug);
-                    }
-                    else
-                    {
-                        HandleCSI(seq); // annan CSI-hantering om du vill
-                    }
-
+                    HandleCSI(seq); // ← kör din riktiga CSI-implementation
                     ChangeState(ParseState.Normal);
                 }
                 else
@@ -433,62 +368,56 @@ public class EscapeSequenceParser
 
             case ParseState.Dcs:
                 seqCharCount++;
-                if (seqCharCount > 32) // eller annan rimlig gräns
-                {
-                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
-                    seqCharCount = 0;
-                }
-                Logger.Log($"[DCS RAW] ESC P ...", Logger.LogLevel.Debug);
-                HandleEscSequence(Encoding.ASCII.GetString(dcsBuffer.ToArray()));
-                // Första gången vi går in i DCS-läget
+                if (seqCharCount > 32) { /* failsafe */ }
+
                 if (dcsBuffer.Count == 0)
                 {
                     dcsStartTime = DateTime.Now;
-                    Logger.Log($"[DCS] Startar DCS-sekvens vid {dcsStartTime:HH:mm:ss.fff}", Logger.LogLevel.Debug);
+                    Logger.Log($"[DCS] Startar vid {dcsStartTime:HH:mm:ss.fff}", Logger.LogLevel.Debug);
                 }
-                if (DateTime.Now - dcsStartTime > TimeSpan.FromSeconds(2))
+
+                if (DateTime.Now - dcsStartTime > DcsTimeout)
                 {
-                    Logger.Log("[DCS] Timeout – avbryter DCS-sekvens", Logger.LogLevel.Debug);
+                    Logger.Log("[DCS] Timeout – avbryter", Logger.LogLevel.Debug);
                     ChangeState(ParseState.Normal);
                     return;
                 }
 
-                if (ch == 0x1B) // ESC avslutar DCS
-                {
-                    ChangeState(ParseState.DcsEsc);
-                }
-                else
-                {
-                    dcsBuffer.Add((byte)ch); // eller .Append(ch) om StringBuilder
-                }
+                if (ch == 0x1B) ChangeState(ParseState.DcsEsc);
+                else dcsBuffer.Add((byte)ch);
+
                 break;
 
             case ParseState.DcsEsc:
                 seqCharCount++;
-                if (seqCharCount > 32) // eller annan rimlig gräns
-                {
-                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
-                    seqCharCount = 0;
-                }
+                if (seqCharCount > 32) { /* failsafe */ }
+
                 if (ch == '\\')
                 {
                     var duration = DateTime.Now - dcsStartTime;
                     Logger.Log($"[DCS] Avslutad efter {duration.TotalMilliseconds} ms", Logger.LogLevel.Debug);
-                    var data = dcsBuffer.ToArray();
-                    OutgoingDcs?.Invoke(data); // <-- trigga eventet
                     var bytes = dcsBuffer.ToArray();
-                    Logger.Log($"[DCS] Mottog DCS-sekvens (ASCII): {Encoding.ASCII.GetString(bytes)}", Logger.LogLevel.Debug);
-                    Logger.Log($"[DCS] Mottog DCS-sekvens (HEX): {BitConverter.ToString(bytes)}", Logger.LogLevel.Debug);
-                    HandleDcs(bytes);
-                    HandleEscSequence(dcsBuffer.ToString());
+
+                    // Statusförfrågan (tom payload)
+                    if (bytes.Length == 0)
+                    {
+                        terminalState.DumpDcsDebug();
+                        var reply = terminalState.GenerateDCSResponse();
+                        _ = tcpClient.SendAsync(reply);
+                        _ = tcpClient.SendAsync("\x11"); // XON
+                    }
+                    else
+                    {
+                        // Kör din tolkning här:
+                        ParseDcsPayload(bytes); // ← viktig
+                    }
+
                     dcsBuffer.Clear();
                     ChangeState(ParseState.Normal);
                 }
                 else
                 {
-                    dcsBuffer.Add((byte)'\x1B');
+                    dcsBuffer.Add((byte)0x1B);
                     dcsBuffer.Add((byte)ch);
                     ChangeState(ParseState.Dcs);
                 }
@@ -613,7 +542,7 @@ public class EscapeSequenceParser
                 break;
 
             default:
-                screenBuffer.WriteChar(screenBuffer.CursorRow, screenBuffer.CursorCol, ch);
+                screenBuffer.WriteChar(screenBuffer.CursorRow, screenBuffer.CursorCol, outChar);
                 screenBuffer.CursorCol++;
                 if (screenBuffer.CursorCol >= screenBuffer.Cols)
                 {
