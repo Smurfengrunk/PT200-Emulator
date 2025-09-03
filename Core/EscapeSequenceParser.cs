@@ -89,23 +89,22 @@ public class EscapeSequenceParser
         if (recentText.Length > 100)
             recentText.Remove(0, recentText.Length - 100);
 
-        if (!EmacsMode && (recentText.ToString().IndexOf("emacs", StringComparison.OrdinalIgnoreCase) >= 0))
+        if (!EmacsMode &&
+            (recentText.ToString().Contains("EMACS") ||
+             recentText.ToString().Contains("Emacs Standard User Interface")))
         {
             EmacsMode = true;
             Logger.Log("[MODE] EMACS mode ON", Logger.LogLevel.Debug);
-            // ChangeState(ParseState.Normal); // frivilligt
         }
 
-        if (EmacsMode && (
-            recentText.ToString().IndexOf("OK,", StringComparison.OrdinalIgnoreCase) >= 0 ||
-            recentText.ToString().IndexOf("ER!", StringComparison.OrdinalIgnoreCase) >= 0
-        ))
+        if (EmacsMode &&
+            (recentText.ToString().Contains("OK,") ||
+             recentText.ToString().Contains("ER!")))
         {
             EmacsMode = false;
             Logger.Log("[MODE] EMACS mode OFF", Logger.LogLevel.Debug);
             ChangeState(ParseState.Normal);
         }
-
         if (!EmacsMode && state != ParseState.Normal)
         {
             Logger.Log($"[FAILSAFE] Utanför EMACS men i state {state} – återställer", Logger.LogLevel.Debug);
@@ -210,7 +209,7 @@ public class EscapeSequenceParser
                         break;
                     case '$':
                         Logger.Log("[ESC] Dollar-sekvens start", Logger.LogLevel.Debug);
-                        ChangeState(ParseState.EscDollar); // ← ändra från Normal till EscDollar
+                        ChangeState(ParseState.EscDollar);
                         break;
                     case '[':
                         csiBuffer.Clear();
@@ -344,6 +343,7 @@ public class EscapeSequenceParser
                 }
                 ChangeState(ParseState.Normal);
                 break;
+
             case ParseState.Csi:
                 seqCharCount++;
                 if (seqCharCount > 32) // eller annan rimlig gräns
