@@ -1,12 +1,11 @@
-﻿using PT200Emulator.Interfaces;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using static PT200Emulator.Core.EscapeSequenceParser;
+using static PT200Emulator.Parser.EscapeSequenceParser;
 
-namespace PT200Emulator.Interfaces
+namespace PT200Emulator.Core
 {
     public interface IScreenBuffer
     {

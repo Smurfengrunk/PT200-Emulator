@@ -5,6 +5,7 @@
         TextInput="Window_TextInput"
         Background="Black"
         KeyDown="Window_KeyDown"
+        PreviewTextInput="Window_TextInput"
         Focusable="True"
         Loaded="Window_Loaded">
 

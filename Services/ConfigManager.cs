@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace PT200Emulator.Util
+namespace PT200Emulator.Services
 {
     class ConfigManager
     {

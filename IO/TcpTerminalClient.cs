@@ -3,11 +3,10 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using PT200Emulator.Core;
 using PT200Emulator.Util; // för Logger
-using PT200Emulator.Interfaces;
+using PT200Emulator.Parser;
 
-namespace PT200Emulator.Util
+namespace PT200Emulator.IO
 {
     public class TcpTerminalClient : ITerminalClient
     {
@@ -92,7 +91,7 @@ namespace PT200Emulator.Util
                                     Logger.Log($"[TELNET] {cmdName} (option {option:X2})");
                                     i++; // hoppa över option
                                     inTelnetCommand = false;
-                                    continue;
+                                    //continue;
                                 }
                             }
                         }
@@ -100,11 +99,17 @@ namespace PT200Emulator.Util
                         if (b == 0xFF) // IAC
                         {
                             inTelnetCommand = true;
+                            // ta inte continue här, utan låt nästa iteration avgöra
+                        }
+                        else if (inTelnetCommand)
+                        {
+                            // hantera telnetkommandot och ev. stäng av inTelnetCommand
                             continue;
                         }
 
                         // Vanlig data → mata parsern
-                        await parser.Feed((char)b);
+                        char ch = Encoding.ASCII.GetChars(new[] { b })[0];
+                        await parser.Feed(ch);
                     }
 
                     // Mode‑detektering med timer

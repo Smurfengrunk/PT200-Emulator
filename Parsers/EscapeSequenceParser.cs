@@ -1,16 +1,16 @@
-﻿using PT200Emulator.Core.Terminal;
-using PT200Emulator.Interfaces;
+﻿using PT200Emulator.Core;
 using PT200Emulator.IO;
 using PT200Emulator.Models;
+using PT200Emulator.Protocol;
 using PT200Emulator.Util;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
-using static PT200Emulator.IO.ControlCharacterHandler;
+using static PT200Emulator.Protocol.ControlCharacterHandler;
 using static PT200Emulator.Util.Logger;
 
-namespace PT200Emulator.Core
+namespace PT200Emulator.Parser
 {
     public class EscapeSequenceParser
     {
@@ -40,6 +40,7 @@ namespace PT200Emulator.Core
         private readonly Esc0CommandSet esc0CommandSet;
         private readonly ControlCharacterHandler controlHandler;
         private readonly ParserErrorHandler errorHandler = new();
+        private readonly EmacsDetector emacsDetector = new();
 
         public EscapeSequenceParser(ITerminalClient client, IScreenBuffer buffer)
         {
@@ -62,36 +63,58 @@ namespace PT200Emulator.Core
 
         public async Task Feed(char ch)
         {
-            if (IsControlCharacter(ch))
+            Logger.Log($"[FEED] RX byte 0x{(int)ch:X2} → '{(char.IsControl(ch) ? "." : ch)}' | State={state}", LogLevel.Debug); if (IsControlCharacter(ch))
             {
                 if (EnableParserDebug)
                     Logger.Log($"[CTRL-IN] 0x{(int)ch:X2}");
 
                 var result = controlHandler.Handle(ch);
-                if (result != ControlCharacterResult.NotHandled)
+                if (IsControlCharacter(ch))
                 {
-                    errorHandler.Handle($"[CTRL-IN] Hanterat kontrolltecken: 0x{(int)ch:X2}");
+                    if (EnableParserDebug)
+                        Logger.Log($"[CTRL-IN] 0x{(int)ch:X2}", LogLevel.Debug);
+
+                    // Hanterade kontrolltecken
+                    // Hantera specialfall
+                    if (result is ControlCharacterResult.LineFeed or ControlCharacterResult.CarriageReturn)
+                    {
+                        HandleNormal(ch); // eller en särskild metod för radslut
+                    }
+                    else if (result is ControlCharacterResult.Bell or ControlCharacterResult.Abort)
+                    {
+                        OutgoingRaw?.Invoke(controlHandler.LastRawBytes);
+                    }
+                    return;
+
+                }
+
+                // Okänt kontrolltecken
+                Logger.Log($"[CTRL-IN] Okänt kontrolltecken: 0x{(int)ch:X2}", LogLevel.Warning);
                     OutgoingRaw?.Invoke(controlHandler.LastRawBytes);
                     return;
                 }
 
-                errorHandler.Handle($"[CTRL-IN] Okänt kontrolltecken: 0x{(int)ch:X2}");
-                OutgoingRaw?.Invoke(controlHandler.LastRawBytes);
-                return;
+            if (EnableParserDebug)
+            {
+                Logger.Log($"[ParserDebugger] Feed('{(char.IsControl(ch) ? $"CTRL({(int)ch:X2})" : ch.ToString())}') | State={state}", LogLevel.Debug);
             }
 
             switch (state)
             {
                 case ParseState.Normal:
+                    Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
                     HandleNormal(ch);
                     break;
                 case ParseState.Escape:
+                    Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
                     HandleEscape(ch);
                     break;
                 case ParseState.CSI:
+                    Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
                     HandleCSI(ch);
                     break;
                 case ParseState.DCS:
+                    Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
                     try
                     {
                         await HandleDCS(ch);
@@ -104,6 +127,7 @@ namespace PT200Emulator.Core
                     }
                     break;
                 case ParseState.Esc0:
+                    Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
                     HandleEsc0(ch);
                     break;
             }
@@ -111,6 +135,10 @@ namespace PT200Emulator.Core
 
         private void HandleNormal(char ch)
         {
+            Logger.Log($"[NORMAL] '{ch}' → WriteChar", LogLevel.Debug);
+            if (EnableParserDebug)
+                Logger.Log($"[ParserDebugger] Normal → '{ch}'", LogLevel.Debug);
+
             if (ch == '\x1B') // ESC
             {
                 state = ParseState.Escape;
@@ -132,16 +160,14 @@ namespace PT200Emulator.Core
                 return;
             }
 
-            if (emacsDetectionEnabled)
+            emacsDetector.Feed(ch);
+
+            if (emacsDetector.IsReady && !emacsMode)
             {
-                try
-                {
-                    DetectEmacs(ch);
-                }
-                catch (Exception ex)
-                {
-                    errorHandler.Handle(ex, $"DetectEmacs misslyckades för tecken 0x{(int)ch:X2} '{ch}'");
-                }
+                emacsMode = true;
+                tcpClient.SendAsync("\x11"); // XON
+                Logger.Log("[MODE] EMACS mode ON");
+                Logger.Log("[CTRL-OUT] XON (0x11) skickad vid EMACS-start");
             }
             char mapped = usingG1 ? MapFromG1(ch) : ch;
             screenBuffer.WriteChar(mapped);
@@ -218,24 +244,24 @@ namespace PT200Emulator.Core
         private void InitDcsCommands()
         {
             dcsCommands["$Q"] = HandleEmacsLayout;
-            dcsCommands["$G"] = data => Logger.Log("[DCS] Set graphics mode ($G) – ignoreras", Logger.LogLevel.Warning);
-            dcsCommands["$B"] = data => Logger.Log("[DCS] Load character set ($B) – ignoreras", Logger.LogLevel.Warning);
+            dcsCommands["$G"] = data => Logger.Log("[DCS] Set graphics mode ($G) – ignoreras", LogLevel.Warning);
+            dcsCommands["$B"] = data => Logger.Log("[DCS] Load character set ($B) – ignoreras", LogLevel.Warning);
             dcsCommands["$0"] = HandleEmacsReset;
             dcsCommands["$X"] = data => Logger.Log("[DCS] Specialkommandot $X tolkas", LogLevel.Info);
         }
         internal void ParseDcsPayload(byte[] data)
         {
-            Logger.Log($"[DCS-IN] {BitConverter.ToString(data)}", Logger.LogLevel.Debug);
-            Logger.LogHex(data, data.Length, "DCS Payload");
+            Logger.Log($"[DCS-IN] {BitConverter.ToString(data)}", LogLevel.Debug);
+            LogHex(data, data.Length, "DCS Payload");
 
             if (data.Length == 0)
             {
-                Logger.Log("[DCS] Tom payload – troligen initsekvens", Logger.LogLevel.Info);
+                Logger.Log("[DCS] Tom payload – troligen initsekvens", LogLevel.Info);
                 return;
             }
 
             string ascii = Encoding.ASCII.GetString(data);
-            Logger.Log($"[DCS] ASCII: '{ascii}'", Logger.LogLevel.Info);
+            Logger.Log($"[DCS] ASCII: '{ascii}'", LogLevel.Info);
 
             foreach (var kvp in dcsCommands)
             {
@@ -247,14 +273,14 @@ namespace PT200Emulator.Core
             }
 
             errorHandler.Handle("DCS: Okänt kommando – payload dump följer");
-            Logger.LogHex(data, data.Length, "DCS Raw");
+            LogHex(data, data.Length, "DCS Raw");
         }
 
         private void HandleEmacsLayout(byte[] data)
         {
             emacsLayout = EmacsLayoutModel.Parse(data);
             emacsMode = true;
-            Logger.Log($"[EMACS] Layout tolkad – fält: {emacsLayout?.Fields.Count ?? 0}", Logger.LogLevel.Info);
+            Logger.Log($"[EMACS] Layout tolkad – fält: {emacsLayout?.Fields.Count ?? 0}", LogLevel.Info);
             EmacsLayoutUpdated?.Invoke();
         }
 
@@ -262,7 +288,7 @@ namespace PT200Emulator.Core
         {
             emacsLayout = null;
             emacsMode = false;
-            Logger.Log("[DCS] EMACS reset ($0) tolkas", Logger.LogLevel.Info);
+            Logger.Log("[DCS] EMACS reset ($0) tolkas", LogLevel.Info);
             EmacsLayoutUpdated?.Invoke();
         }
 
@@ -369,67 +395,6 @@ namespace PT200Emulator.Core
             return g1Map.TryGetValue((byte)ch, out var mapped) ? mapped : ch;
         }
 
-      /*private Dictionary<string, Action> InitEsc0Commands()
-        {
-            return new Dictionary<string, Action>
-            {
-                // ────── Linjer och hörn (tecken + '!')
-                { "#!", () => DrawGraphic('│') }, // vertikal linje
-                { "$!", () => DrawGraphic('─') }, // horisontell linje
-                { "%!", () => DrawGraphic('┌') }, // hörn uppe vänster
-                { "&!", () => DrawGraphic('┐') }, // hörn uppe höger
-                { "'!", () => DrawGraphic('└') }, // hörn nere vänster
-                { "(!", () => DrawGraphic('┘') }, // hörn nere höger
-                { ")!", () => DrawGraphic('├') }, // T‑korsning vänster
-                { "*!", () => DrawGraphic('┤') }, // T‑korsning höger
-                { "+!", () => DrawGraphic('┬') }, // T‑korsning upp
-                { ",!", () => DrawGraphic('┴') }, // T‑korsning ner
-                { "-!", () => DrawGraphic('┼') }, // korsning
-
-                // ────── Statusfält / attribut
-                { "6!", () => screenBuffer.SetCursorPosition(screenBuffer.Rows - 1, 0) }, // flytta till statusrad
-                { "!!", () => { // rensa statusrad
-                    int lastRow = screenBuffer.Rows - 1;
-                    for (int c = 0; c < screenBuffer.Cols; c++)
-                        screenBuffer.WriteChar(lastRow, c, ' ');
-                }},
-                //{ "\"!", () => { /* Set status field attributes – kan implementeras  } },
-
-                // ────── Symboler (tecken + '!')
-                { "A!", () => DrawGraphic('★') },
-                { "B!", () => DrawGraphic('☆') },
-                { "C!", () => DrawGraphic('●') },
-                { "D!", () => DrawGraphic('○') },
-                { "E!", () => DrawGraphic('◆') },
-                { "F!", () => DrawGraphic('◇') },
-                { "G!", () => DrawGraphic('▲') },
-                { "H!", () => DrawGraphic('▼') },
-                { "I!", () => DrawGraphic('►') },
-                { "J!", () => DrawGraphic('◄') },
-                { "\"!", () => {
-                    // Set status field attributes – i EMACS används den ofta före text på statusraden.
-                    // Vi kan välja att ignorera den visuellt, men det kan vara bra att nollställa ev. attribut.
-                    screenBuffer.ResetAttributes();
-                                }},
-            };
-        }
-
-        private Dictionary<string, Action<string>> InitEsc0HexCommands()
-        {
-            // Hex-koderna är de som skickas som två hextecken följt av '*'
-            // Vi tar emot själva hexdelen som string (t.ex. "69") och kan använda den
-            return new Dictionary<string, Action<string>>
-                {
-                    { "69", _ => DrawGraphic('█') }, // full block
-                    { "6A", _ => DrawGraphic('▄') }, // lower half block
-                    { "6B", _ => DrawGraphic('▀') }, // upper half block
-                    { "6C", _ => DrawGraphic('▒') }, // medium shade
-                    { "6D", _ => DrawGraphic('░') }, // light shade
-                    { "6E", _ => DrawGraphic('▓') }, // dark shade
-                    // Här kan du fylla på fler hexkoder från PT200-manualen vid behov
-                };
-        }*/
-
         private Dictionary<byte, char> InitG1Map()
         {
             return new Dictionary<byte, char>
@@ -445,8 +410,8 @@ namespace PT200Emulator.Core
         }
         private void Log(string msg)
         {
-            if (EnableParserDebug && Logger.IsEnabled(Logger.LogLevel.Debug))
-                Logger.Log(msg, Logger.LogLevel.Debug);
+            if (EnableParserDebug && IsEnabled(LogLevel.Debug))
+                Logger.Log(msg, LogLevel.Debug);
         }
 
         private void HandleBreak()
@@ -456,7 +421,7 @@ namespace PT200Emulator.Core
             EmacsLayoutUpdated?.Invoke();
             screenBuffer.Clear();
             screenBuffer.SetCursorPosition(0, 0);
-            Logger.Log("[BREAK] Terminalen har nollställts", Logger.LogLevel.Info);
+            Logger.Log("[BREAK] Terminalen har nollställts", LogLevel.Info);
         }
     }
 }

@@ -1,6 +1,8 @@
 ﻿using PT200Emulator.Core;
 using PT200Emulator.IO;
 using PT200Emulator.Models;
+using PT200Emulator.Parser;
+using PT200Emulator.Protocol;
 using PT200Emulator.Util;
 using System;
 using System.Globalization;
@@ -16,7 +18,7 @@ using System.Windows.Media.Media3D;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using static PT200Emulator.Core.PT200State;
-using static PT200Emulator.IO.ControlCharacterHandler;
+using static PT200Emulator.Protocol.ControlCharacterHandler;
 using static PT200Emulator.Util.Logger;
 
 namespace PT200Emulator.UI
@@ -40,10 +42,14 @@ namespace PT200Emulator.UI
         private bool promptWasMarkedLastFrame = false;
         private static EmacsLayoutModel EmacsLayout;
         private readonly ControlCharacterHandler controlHandler = new();
+        internal AttributeTracker attr = new AttributeTracker();
+        private ThemeManager themeManager;
 
         public MainWindow()
         {
             InitializeComponent();
+            attr = new AttributeTracker();
+            themeManager = new ThemeManager(attr, TerminalCanvas, StatusText, ClockTextBlock);
             ConsoleManager.Open();
             StartCursorBlink();
             cursorVisible = true;
@@ -88,7 +94,7 @@ namespace PT200Emulator.UI
             };
 
             // Skapa buffert och parser
-            screenBuffer = new ScreenBuffer(cols, rows);
+            screenBuffer = new ScreenBuffer(cols, rows, attr);
             // Skapa parsern
             parser = new EscapeSequenceParser(tcpClient, screenBuffer);
             tcpClient = new TcpTerminalClient(parser);
@@ -100,6 +106,7 @@ namespace PT200Emulator.UI
             };
             parser.OutgoingRaw += async bytes =>
             {
+                Logger.Log($"[TX MainWindow] Skickar {bytes.Length} bytes: {BitConverter.ToString(bytes)}", LogLevel.Info);
                 Logger.LogHex(bytes, bytes.Length, "RAW");
                 await tcpClient.SendAsync(bytes);
             };
@@ -129,69 +136,67 @@ namespace PT200Emulator.UI
             clockTimer.Start();
 
             // Rita första gången
-            UpdateTerminalDisplay();
             ApplyDisplayTheme(DisplayType.Green);
+            UpdateTerminalDisplay();
 
             // RunParserSelfTest();
         }
 
-        private void ControlHandler_BreakReceived()
-        {
-            throw new NotImplementedException();
-        }
-
         private void ApplyDisplayTheme(DisplayType type)
         {
-            currentDisplayType = type;
-            state.Display = type;
-
-            TerminalCanvas.Height = screenBuffer.Rows * lineHeight;
-            Logger.Log($"Canvas height: {TerminalCanvas.Height}", LogLevel.Debug);
-            TerminalCanvas.Background = DisplayTheme.GetBackground(type);
-
-            StatusText.Foreground = DisplayTheme.GetInvertedForeground(currentDisplayType);
-            StatusText.Background = DisplayTheme.GetInvertedBackground(currentDisplayType);
-            ClockTextBlock.Foreground = DisplayTheme.GetInvertedForeground(currentDisplayType);
-            ClockTextBlock.Background = DisplayTheme.GetInvertedBackground(currentDisplayType);
+            themeManager.Apply(type);
             UpdateTerminalDisplay();
             Keyboard.Focus(this);
-
         }
 
-        private void SetWhiteDisplay(object sender, RoutedEventArgs e)
-        {
-            ApplyDisplayTheme(DisplayType.White);
-            Keyboard.Focus(this);
-        }
-        private void SetBlueDisplay(object sender, RoutedEventArgs e)
-        {
-            ApplyDisplayTheme(DisplayType.Blue);
-            Keyboard.Focus(this);
-        }
-        private void SetGreenDisplay(object sender, RoutedEventArgs e)
-        {
-            ApplyDisplayTheme(DisplayType.Green);
-            Keyboard.Focus(this);
-        }
-        private void SetAmberDisplay(object sender, RoutedEventArgs e)
-        {
-            ApplyDisplayTheme(DisplayType.Amber);
-            Keyboard.Focus(this);
-        }
-        private void SetFullColorDisplay(object sender, RoutedEventArgs e)
-        {
-            ApplyDisplayTheme(DisplayType.FullColor);
-            Keyboard.Focus(this);
-        }
-
+        private void SetWhiteDisplay(object sender, RoutedEventArgs e) => ApplyDisplayTheme(DisplayType.White);
+        private void SetBlueDisplay(object sender, RoutedEventArgs e) => ApplyDisplayTheme(DisplayType.Blue);
+        private void SetGreenDisplay(object sender, RoutedEventArgs e) => ApplyDisplayTheme(DisplayType.Green);
+        private void SetAmberDisplay(object sender, RoutedEventArgs e) => ApplyDisplayTheme(DisplayType.Amber);
+        private void SetFullColorDisplay(object sender, RoutedEventArgs e) => ApplyDisplayTheme(DisplayType.FullColor);
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            ApplyDisplayTheme(DisplayType.Green); // eller valfritt
+
+            /*screenBuffer.MoveCursorHome();
+
+            //attr.SetForeground(Brushes.LimeGreen);
+            //attr.SetBackground(Brushes.DarkBlue);
+
+            screenBuffer.WriteChar('L');
+            screenBuffer.WriteChar('o');
+            screenBuffer.WriteChar('g');
+            screenBuffer.WriteChar('i');
+            screenBuffer.WriteChar('n');
+            screenBuffer.WriteChar(':');
+            screenBuffer.WriteChar(' ');
+            screenBuffer.WriteChar('\n');
+
+            screenBuffer.WriteChar('>');
+            screenBuffer.WriteChar(' ');
+            screenBuffer.WriteChar('E');
+            screenBuffer.WriteChar('n');
+            screenBuffer.WriteChar('t');
+            screenBuffer.WriteChar('e');
+            screenBuffer.WriteChar('r');
+            screenBuffer.WriteChar(' ');
+            screenBuffer.WriteChar('p');
+            screenBuffer.WriteChar('a');
+            screenBuffer.WriteChar('s');
+            screenBuffer.WriteChar('s');
+            screenBuffer.WriteChar('w');
+            screenBuffer.WriteChar('o');
+            screenBuffer.WriteChar('r');
+            screenBuffer.WriteChar('d');
+            screenBuffer.WriteChar(':');
+            screenBuffer.WriteChar('\n');*/
+
             Keyboard.Focus(this); // Se till att fönstret har fokus
         }
 
         private async void Window_KeyDown(object sender, KeyEventArgs e)
         {
-            // Ctrl + [A-Z] → kontrolltecken 0x01–0x1A
+            Logger.Log($"[TX] KeyDown", LogLevel.Info);// Ctrl + [A-Z] → kontrolltecken 0x01–0x1A
             if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
             {
                 if (e.Key >= Key.A && e.Key <= Key.Z)
@@ -227,16 +232,6 @@ namespace PT200Emulator.UI
                 return;
             }
 
-            // Funktion för att räkna ut modifierarkod enligt ANSI/VT
-            int GetModCode()
-            {
-                int code = 1;
-                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) code += 1;
-                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) code += 2;
-                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) code += 4;
-                return code;
-            }
-
             bool hasMod = Keyboard.Modifiers != ModifierKeys.None;
             string seq = null;
 
@@ -249,7 +244,7 @@ namespace PT200Emulator.UI
                     seq = "\t";
                     break;
                 case Key.Enter:
-                    seq = "\r"; // PT200 skickar CR
+                    seq = "\r\n"; // PT200 skickar CR
                     break;
                 case Key.Back:
                     seq = "\b";
@@ -350,6 +345,18 @@ namespace PT200Emulator.UI
             return code;
         }
 
+        private async void Window_PreviewTextInput(object sender, TextCompositionEventArgs e)
+        {
+            if (string.IsNullOrEmpty(e.Text))
+                return;
+
+            char ch = e.Text[0];
+            Logger.Log($"[KEY] PreviewTextInput: '{ch}'", LogLevel.Debug);
+
+            await tcpClient.SendAsync(new string(ch, 1)); // Skicka till värddatorn
+            await parser.Feed(ch);                              // Visa lokalt
+            e.Handled = true;
+        }
 
         private async void Window_TextInput(object sender, TextCompositionEventArgs e)
         {
@@ -364,11 +371,9 @@ namespace PT200Emulator.UI
 
         private void UpdateTerminalDisplay()
         {
+            //Logger.Log($"[TX] UpdateTerminalDisplay", LogLevel.Info);// Ctrl + [A-Z] → kontrolltecken 0x01–0x1A
             bool isPromptPosition = screenBuffer.CursorRow == 21 && screenBuffer.CursorCol == 0;
             TerminalCanvas.Height = screenBuffer.Rows * lineHeight;
-            //Logger.Log($"Canvas height: {TerminalCanvas.Height}", LogLevel.Debug);
-            //Logger.Log($"Rad 23: '{screenBuffer.GetLine(23)}'", LogLevel.Debug);
-
             TerminalCanvas.Children.Clear();
 
             var lines = screenBuffer.GetAllLines().ToList();
@@ -378,28 +383,39 @@ namespace PT200Emulator.UI
 
             var typeface = new Typeface("Consolas");
 
-            for (int r = 0; r < lines.Count; r++)
+            for (int r = 0; r < screenBuffer.Rows; r++)
             {
-                var line = lines[r];
-                var formatted = new FormattedText(
-                    line,
-                    CultureInfo.CurrentCulture,
-                    FlowDirection.LeftToRight,
-                    typeface,
-                    fontSize,
-                    DisplayTheme.GetForeground(currentDisplayType),
-                    1.0);
-
-                var geometry = formatted.BuildGeometry(new Point(0, 0));
-                var path = new System.Windows.Shapes.Path
+                for (int c = 0; c < screenBuffer.Cols; c++)
                 {
-                    Data = geometry,
-                    Fill = DisplayTheme.GetForeground(currentDisplayType)
-                };
+                    var cell = screenBuffer.GetCell(r, c);
 
-                Canvas.SetTop(path, r * lineHeight);
-                Canvas.SetLeft(path, 0);
-                TerminalCanvas.Children.Add(path);
+                    var text = new TextBlock
+                    {
+                        Text = cell.Character.ToString(),
+                        Foreground = cell.Foreground,
+                        //Foreground = Brushes.LimeGreen,
+                        //Background = Brushes.DarkBlue,
+                        FontFamily = new FontFamily("Consolas"),
+                        FontSize = fontSize,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+
+                    var border = new Border
+                    {
+                        Background = cell.Background,
+                        Width = charWidth,
+                        Height = lineHeight,
+                        Child = text
+                    };
+                    /*if (!string.IsNullOrWhiteSpace(cell.Character.ToString()))
+                    {
+                        Logger.Log($"[Render] '{cell.Character}' at ({r},{c}) → FG={cell.Foreground}, BG={cell.Background}", LogLevel.Debug);
+                    }*/
+                    Canvas.SetLeft(border, c * charWidth);
+                    Canvas.SetTop(border, r * lineHeight);
+                    TerminalCanvas.Children.Add(border);
+                }
             }
 
             if (isPromptPosition)
@@ -414,17 +430,18 @@ namespace PT200Emulator.UI
                 Canvas.SetTop(marker, screenBuffer.CursorRow * lineHeight);
                 Canvas.SetLeft(marker, screenBuffer.CursorCol * charWidth);
                 TerminalCanvas.Children.Add(marker);
-
                 if (!promptWasMarkedLastFrame)
                 {
                     Logger.Log("[UI] Visuell markering för EMACS-prompt satt", Logger.LogLevel.Debug);
                     promptWasMarkedLastFrame = true;
                 }
+                else
+                {
+                    promptWasMarkedLastFrame = false;
+                }
             }
-            else
-            {
-                promptWasMarkedLastFrame = false;
-            }
+
+
 
             if (parser.EmacsMode && parser.EmacsLayout != null)
             {
@@ -437,54 +454,12 @@ namespace PT200Emulator.UI
                         Logger.Log($"[UI] Fält: rad={field.Row}, kol={field.Col}, längd={field.Length}", LogLevel.Debug);
                         Logger.Log($"[EMACS] Fält tolkade: {parser.EmacsLayout?.Fields.Count ?? 0}", LogLevel.Info);
 
-                        /*var label = new TextBlock
-                        {
-                            Text = $"[{field.Row},{field.Col}]",
-                            Foreground = Brushes.Black,
-                            FontFamily = new FontFamily("Consolas"),
-                            FontSize = 12
-                        };
-                        Canvas.SetTop(label, field.Row * lineHeight);
-                        Canvas.SetLeft(label, field.Col * charWidth);
-                        TerminalCanvas.Children.Add(label);
 
-                        var rect = new Rectangle
-                        {
-                            Width = field.Length * charWidth,
-                            Height = lineHeight,
-                            //Width = field.Length * 8,
-                            //Height = 16,
-                            Fill = field.Reverse ? Brushes.DarkBlue : Brushes.LightGray,
-                            Opacity = 0.2
-                        };
-                        Canvas.SetTop(rect, field.Row * lineHeight);
-                        Canvas.SetLeft(rect, field.Col * charWidth);
-                        TerminalCanvas.Children.Add(rect);*/
                     }
                 }
             }
             else
             {
-                /*var msg = new TextBlock
-                {
-                    Text = "Ingen layout aktiv",
-                    Foreground = Brushes.Gray,
-                    FontSize = 14
-                };
-                Canvas.SetTop(msg, 10);
-                Canvas.SetLeft(msg, 10);
-                TerminalCanvas.Children.Add(msg);
-            }
-            var emstatus = new TextBlock
-            {
-                Text = $"EMACS: {(parser.EmacsMode ? "Aktiv" : "Inaktiv")}, Fält: {parser.EmacsLayout?.Fields.Count ?? 0}",
-                Foreground = Brushes.Green,
-                FontSize = 12
-            };
-            Canvas.SetTop(emstatus, 0);
-            Canvas.SetLeft(emstatus, 0);
-            TerminalCanvas.Children.Add(emstatus);*/
-
                 string statusLine = screenBuffer.GetLine(screenBuffer.Rows - 1);
                 if (!string.IsNullOrWhiteSpace(statusLine) && statusLine != lastStatusLine)
                 {
@@ -534,6 +509,8 @@ namespace PT200Emulator.UI
                 StatusText.Text = $"Cursor: ({screenBuffer.CursorRow},{screenBuffer.CursorCol}) | Färg: {state.Display}";
             }
         }
+
+
 
         private void StartCursorBlink()
         {

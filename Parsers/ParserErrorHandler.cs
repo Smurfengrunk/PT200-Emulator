@@ -2,7 +2,7 @@
 using System;
 using static PT200Emulator.Util.Logger;
 
-namespace PT200Emulator.Core.Terminal
+namespace PT200Emulator.Parser
 {
     public class ParserErrorHandler
     {
@@ -12,12 +12,12 @@ namespace PT200Emulator.Core.Terminal
             if (!string.IsNullOrEmpty(context))
                 message += $" | Kontext: {context}";
 
-            Logger.Log(message, LogLevel.Error);
+            Log(message, LogLevel.Error);
         }
 
         public void Handle(string message)
         {
-            Logger.Log($"[PARSER-WARNING] {message}", LogLevel.Warning);
+            Log($"[PARSER-WARNING] {message}", LogLevel.Warning);
         }
     }
 }

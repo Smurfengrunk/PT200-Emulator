@@ -1,6 +1,9 @@
-﻿using PT200Emulator.Interfaces;
+﻿using PT200Emulator.Core;
+using PT200Emulator.UI;
 using PT200Emulator.Util;
+using System.Windows.Input;
 using System.Windows.Media;
+using static PT200Emulator.Util.Logger;
 
 public class ScreenBuffer : IScreenBuffer
 {
@@ -15,6 +18,7 @@ public class ScreenBuffer : IScreenBuffer
     private readonly int rows;
     private readonly int cols;
     private readonly Cell[,] buffer;
+    private readonly AttributeTracker attr;
 
     public int CursorRow { get; set; }
     public int CursorCol { get; set; }
@@ -27,10 +31,11 @@ public class ScreenBuffer : IScreenBuffer
     public int Rows => rows;
     public int Cols => cols;
 
-    public ScreenBuffer(int cols, int rows)
+    public ScreenBuffer(int cols, int rows, AttributeTracker attr)
     {
         this.rows = rows;
         this.cols = cols;
+        this.attr = attr;
         buffer = new Cell[rows, cols];
 
         // Initiera bufferten med tomma celler
@@ -70,37 +75,60 @@ public class ScreenBuffer : IScreenBuffer
     // Skriv ett tecken på aktuell position
     public void WriteChar(int row, int col, char ch, bool blink = false)
     {
-        Logger.Log($"[Buffer] ({row},{col}) = '{ch}'", Logger.LogLevel.Debug);
-        var fg = reverseVideo ? currentBackground : currentForeground;
-        var bg = reverseVideo ? currentForeground : currentBackground;
-
-        buffer[row, col] = new Cell
+        if (ch == '\r')
         {
-            Character = ch,
-            Foreground = fg,
-            Background = bg,
-            Blink = blink
-        };
+            CursorCol = 0;
+            return;
+        }
+        if (ch == '\n')
+        {
+            CursorRow += 1;
+            CursorCol = 0;
+            return;
+        }
+
+        Logger.Log($"[Buffer] ({row},{col}) = '{ch}'", Logger.LogLevel.Debug);
+        //var fg = reverseVideo ? currentBackground : currentForeground;
+        //var bg = reverseVideo ? currentForeground : currentBackground;
+        attr.LogAttributes(CursorRow, CursorCol, ch);
+        buffer[CursorRow, CursorCol] = attr.CreateCell(ch);
     }
 
     public void WriteChar(int row, int col, char ch, Brush fg, Brush bg, bool blink)
     {
-        Logger.Log($"[Buffer] ({row},{col}) = '{ch}'", Logger.LogLevel.Debug);
-        buffer[row, col] = new Cell
+        if (ch == '\r')
         {
-            Character = ch,
-            Foreground = fg,
-            Background = bg,
-            Blink = blink
-        };
+            CursorCol = 0;
+            return;
+        }
+        if (ch == '\n')
+        {
+            CursorRow += 1;
+            CursorCol = 0;
+            return;
+        }
+        attr.LogAttributes(CursorRow, CursorCol, ch);
+        buffer[CursorRow, CursorCol] = attr.CreateCell(ch);
     }
 
     public void WriteChar(int row, int col, char ch)
     {
-        Logger.Log($"[Buffer] ({row},{col}) = '{ch}'", Logger.LogLevel.Debug);
+        if (ch == '\r')
+        {
+            CursorCol = 0;
+            return;
+        }
+        if (ch == '\n')
+        {
+            CursorRow += 1;
+            CursorCol = 0;
+            return;
+        }
 
         var fg = reverseVideo ? currentBackground : currentForeground;
         var bg = reverseVideo ? currentForeground : currentBackground;
+
+        Logger.Log($"[WriteChar] '{ch}' at ({row},{col}) | FG={fg}, BG={bg}", Logger.LogLevel.Debug);
 
         buffer[row, col] = new Cell
         {
@@ -114,21 +142,16 @@ public class ScreenBuffer : IScreenBuffer
 
     public void WriteChar(char ch)
     {
-        Logger.Log($"[Buffer] ({CursorRow},{CursorCol}) = '{ch}'", Logger.LogLevel.Debug);
+        if (ch == '\r') { CursorCol = 0; return; }
+        if (ch == '\n') { CursorRow += 1; CursorCol = 0; return; }
 
-        var fg = reverseVideo ? currentBackground : currentForeground;
-        var bg = reverseVideo ? currentForeground : currentBackground;
 
-        buffer[CursorRow, CursorCol] = new Cell
-        {
-            Character = ch,
-            Foreground = fg,
-            Background = bg,
-            Blink = false
-        };
-
+        attr.LogAttributes(CursorRow, CursorCol, ch);
+        buffer[CursorRow, CursorCol] = attr.CreateCell(ch);
+        Logger.Log($"[WRITE] '{ch}' @ ({CursorCol},{CursorRow})", LogLevel.Debug);
         AdvanceCursor();
     }
+
     private bool IsStatusRow => CursorRow == Rows - 1;
 
     private void AdvanceCursor()

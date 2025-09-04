@@ -1,9 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using PT200Emulator.Interfaces;
+using PT200Emulator.Core;
 using PT200Emulator.Util;
 
-namespace PT200Emulator.Core.Terminal
+namespace PT200Emulator.Parser
 {
     public class CsiCommandSet
     {
