@@ -1,620 +1,438 @@
-﻿using PT200Emulator.Core;
+﻿using PT200Emulator.Core.Terminal;
+using PT200Emulator.Interfaces;
+using PT200Emulator.IO;
 using PT200Emulator.Models;
 using PT200Emulator.Util;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows;
-using static PT200Emulator.Core.PT200State;
+using static PT200Emulator.IO.ControlCharacterHandler;
 using static PT200Emulator.Util.Logger;
 
-public class EscapeSequenceParser
+namespace PT200Emulator.Core
 {
-    public event Action<byte[]> OutgoingDcs;
-
-    private enum ParseState { Normal, Esc, Csi, Pt200ZeroSymbol, Pt200ZeroHex, Dcs, DcsEsc, G0Select, EscDollar }
-
-    private ParseState state = ParseState.Normal;
-    private StringBuilder csiBuffer = new StringBuilder();
-    private StringBuilder esc0Buffer = new StringBuilder();
-    //private bool esc0HexMode = false;
-
-    private List<byte> dcsBuffer = new List<byte>();
-    //private bool dcsEscPending = false;
-
-    private string g0Charset = "ASCII";
-    private string g1Charset = "ASCII";
-    private bool usingG1 = false;
-
-    private readonly ScreenBuffer screenBuffer;
-    private readonly Dictionary<string, Action> esc0Commands;
-    private readonly Dictionary<string, Action<string>> esc0HexCommands;
-    private readonly Dictionary<byte, char> g1Map;
-    internal EmacsLayoutModel emacsLayout;
-    public bool EmacsMode { get; internal set; }
-    PT200State pstate = new PT200State();
-    private bool inCommandMode = false;
-
-    public event Action EmacsLayoutUpdated;
-    private TcpTerminalClient tcpClient;
-    private PT200State terminalState = new PT200State();
-
-    public EscapeSequenceParser(ScreenBuffer buffer)
+    public class EscapeSequenceParser
     {
-        screenBuffer = buffer;
-        esc0Commands = InitEsc0Commands();
-        esc0HexCommands = InitEsc0HexCommands();
-        g1Map = InitG1Map();
-        var format = pstate.screenFormat;
-        g0Charset = "ASCII";
-        g1Charset = "ASCII";
-        usingG1 = false;
-        inCommandMode = true;   // blockera grafikläge tills vi vet att vi ska använda det
-        state = ParseState.Normal;
-        tcpClient = new TcpTerminalClient(this);
-    }
+        private const bool EnableParserDebug = true;
 
-    public event Action<byte[]> OutgoingRaw;
+        private enum ParseState { Normal, Escape, CSI, DCS, Esc0 }
+        private ParseState state = ParseState.Normal;
 
-    private const int MaxDcsLength = 1024;
-    private static readonly TimeSpan DcsTimeout = TimeSpan.FromMilliseconds(2000);
+        private readonly StringBuilder seqBuffer = new();
+        private readonly Dictionary<byte, char> g1Map;
+        private bool usingG1 = false;
+        private bool emacsMode = false;
+        private bool emacsDetectionEnabled = false;
+        internal bool EmacsMode => emacsMode;
+        private EmacsLayoutModel emacsLayout;
+        internal EmacsLayoutModel EmacsLayout => emacsLayout;
+        internal event Action EmacsLayoutUpdated;
 
-    private DateTime dcsStartTime = DateTime.Now;
-    private DateTime csiStartTime = DateTime.Now;
+        private readonly ITerminalClient tcpClient;
+        private readonly IScreenBuffer screenBuffer;
 
-    private const int MaxCsiLength = 256;
-    private static readonly TimeSpan CsiTimeout = TimeSpan.FromMilliseconds(1000);
-    private int graphicsSniffCount = 0;
-    private int seqCharCount = 0;
+        public event Func<byte[], Task> OutgoingDcs;
+        public event Func<byte[], Task> OutgoingRaw;
 
-    private void ChangeState(ParseState newState)
-    {
-        Logger.Log($"[STATE] {state} → {newState}", Logger.LogLevel.Debug);
-        state = newState;
-        seqCharCount = 0; // om du har failsafe-räknare
-    }    
+        private readonly Dictionary<string, Action<byte[]>> dcsCommands = new();
+        private readonly CsiCommandSet csiCommandSet;
+        private readonly Esc0CommandSet esc0CommandSet;
+        private readonly ControlCharacterHandler controlHandler;
+        private readonly ParserErrorHandler errorHandler = new();
 
-    private Queue<char> lastChars = new Queue<char>(3);
-
-    private StringBuilder recentText = new StringBuilder();
-
-    public void Feed(char ch)
-    {
-        // I början av Feed:
-        if (ch < 0x20 || ch == 0x7F) // kontrolltecken + DEL
+        public EscapeSequenceParser(ITerminalClient client, IScreenBuffer buffer)
         {
-            Logger.Log($"[CTRL-IN] 0x{(int)ch:X2} ({(int)ch})", Logger.LogLevel.Debug);
-        }
-        // Lägg till i recentText för att kunna matcha längre fraser
-        recentText.Append(ch);
-        if (recentText.Length > 100)
-            recentText.Remove(0, recentText.Length - 100);
+            tcpClient = client;
+            screenBuffer = buffer;
+            g1Map = InitG1Map();
 
-        if (!EmacsMode &&
-            (recentText.ToString().Contains("EMACS") ||
-             recentText.ToString().Contains("Emacs Standard User Interface")))
-        {
-            EmacsMode = true;
-            Logger.Log("[MODE] EMACS mode ON", Logger.LogLevel.Debug);
-
-            // Forcerad XON för att väcka EMACS direkt
-            _ = tcpClient.SendAsync("\x11"); // XON
-            Logger.Log("[CTRL-OUT] XON (0x11) skickad vid EMACS-start", Logger.LogLevel.Debug);
-        }
-        if (EmacsMode &&
-            (recentText.ToString().Contains("OK,", StringComparison.OrdinalIgnoreCase) ||
-             recentText.ToString().Contains("ER!", StringComparison.OrdinalIgnoreCase)))
-        {
-            EmacsMode = false;
-            Logger.Log("[MODE] EMACS mode OFF", Logger.LogLevel.Debug);
-            ChangeState(ParseState.Normal);
-        }
-        if (!EmacsMode && state != ParseState.Normal)
-        {
-            Logger.Log($"[FAILSAFE] Utanför EMACS men i state {state} – återställer", Logger.LogLevel.Debug);
-            ChangeState(ParseState.Normal);
+            InitDcsCommands();
+            csiCommandSet = new CsiCommandSet(screenBuffer);
+            esc0CommandSet = new Esc0CommandSet(screenBuffer);
+            controlHandler = new ControlCharacterHandler();
+            controlHandler.BreakReceived += HandleBreak;
+            controlHandler.RawOutput += bytes => OutgoingRaw?.Invoke(bytes);
         }
 
-        if (!EmacsMode)
+        private static bool IsControlCharacter(char ch)
         {
-            Logger.Log($"[RAW OUTSIDE EMACS] Recent text: {recentText}", Logger.LogLevel.Debug);
-        }
-        else
-        {
-            Logger.Log($"[RAW INSIDE EMACS] Recent text: {recentText}", Logger.LogLevel.Debug);
+            return ch < 0x20 || ch == 0x7F;
         }
 
-        // Avblockera kommandoläge om vi ser EMACS-start
-        if (inCommandMode && recentText.ToString().Contains("Initializing EMACS"))
+        public async Task Feed(char ch)
         {
-            inCommandMode = false;
-            Logger.Log("[Mode] Lämnar kommandoläge – EMACS startar (textmatch)", Logger.LogLevel.Debug);
-        }
+            if (IsControlCharacter(ch))
+            {
+                if (EnableParserDebug)
+                    Logger.Log($"[CTRL-IN] 0x{(int)ch:X2}");
 
-        switch (ch)
-        {
-            // Logga SO/SI
-            case (char)0x0E:
-                usingG1 = true; Logger.Log("[SO] G1 aktiv", LogLevel.Debug);
-                break;
-
-            case (char)0x0F: // SI – Shift In (G0)
+                var result = controlHandler.Handle(ch);
+                if (result != ControlCharacterResult.NotHandled)
                 {
-                    usingG1 = false;
-                    Logger.Log("[SI] Shift In – växlar till G0", Logger.LogLevel.Debug);
+                    errorHandler.Handle($"[CTRL-IN] Hanterat kontrolltecken: 0x{(int)ch:X2}");
+                    OutgoingRaw?.Invoke(controlHandler.LastRawBytes);
+                    return;
+                }
+
+                errorHandler.Handle($"[CTRL-IN] Okänt kontrolltecken: 0x{(int)ch:X2}");
+                OutgoingRaw?.Invoke(controlHandler.LastRawBytes);
+                return;
+            }
+
+            switch (state)
+            {
+                case ParseState.Normal:
+                    HandleNormal(ch);
                     break;
-                }
-
-            // Ctrl-P (BREAK)
-            case (char)0x10:
-                {
-                    Logger.Log("[PT200] BREAK (Ctrl-P) detected", Logger.LogLevel.Debug);
-                    OutgoingRaw?.Invoke(new byte[] { 0x10 });
-                    g0Charset = "ASCII";
-                    g1Charset = "ASCII";
-                    usingG1 = false;
-                    inCommandMode = true;
-                    Logger.Log("[Charset] Återställer till ASCII och går in i kommandoläge efter BREAK", Logger.LogLevel.Debug);
+                case ParseState.Escape:
+                    HandleEscape(ch);
                     break;
-                }
-        }
-        // Promptdetektor: håll senaste 3 tecken
-        lastChars.Enqueue(ch);
-        if (lastChars.Count > 3) lastChars.Dequeue();
-        if (new string(lastChars.ToArray()) == "OK,")
-        {
-            g0Charset = "ASCII";
-            g1Charset = "ASCII";
-            usingG1 = false;
-            inCommandMode = true;
-            Logger.Log("[Charset] Återställer till ASCII och går in i kommandoläge vid OK,-prompt", Logger.LogLevel.Debug);
+                case ParseState.CSI:
+                    HandleCSI(ch);
+                    break;
+                case ParseState.DCS:
+                    try
+                    {
+                        await HandleDCS(ch);
+                    }
+                    catch (Exception ex)
+                    {
+                        errorHandler.Handle(ex, $"DCS-sekvens: {seqBuffer}");
+                        state = ParseState.Normal;
+                        seqBuffer.Clear();
+                    }
+                    break;
+                case ParseState.Esc0:
+                    HandleEsc0(ch);
+                    break;
+            }
         }
 
-        // State-maskin
-        switch (state)
+        private void HandleNormal(char ch)
         {
-            case ParseState.Normal:
-                seqCharCount = 0;
+            if (ch == '\x1B') // ESC
+            {
+                state = ParseState.Escape;
+                seqBuffer.Clear();
+                return;
+            }
 
-                if (ch == 0x1B) // ESC
+            if (ch == '\x0E') // SO
+            {
+                usingG1 = true;
+                Log("[SO] G1 charset aktiv");
+                return;
+            }
+
+            if (ch == '\x0F') // SI
+            {
+                usingG1 = false;
+                Log("[SI] G0 charset aktiv");
+                return;
+            }
+
+            if (emacsDetectionEnabled)
+            {
+                try
                 {
-                    ChangeState(ParseState.Esc);
-                    Logger.Log("[STATE] Normal → Esc", Logger.LogLevel.Debug);
+                    DetectEmacs(ch);
                 }
-                else if (ch == 0x18 || ch == 0x1A) // CAN eller SUB
+                catch (Exception ex)
                 {
-                    Logger.Log($"[CTRL] Avbrytsekvens mottagen: 0x{ch:X2}", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
+                    errorHandler.Handle(ex, $"DetectEmacs misslyckades för tecken 0x{(int)ch:X2} '{ch}'");
+                }
+            }
+            char mapped = usingG1 ? MapFromG1(ch) : ch;
+            screenBuffer.WriteChar(mapped);
+        }
+
+        private void HandleEscape(char ch)
+        {
+            if (ch == '[')
+            {
+                state = ParseState.CSI;
+                seqBuffer.Clear();
+                return;
+            }
+
+            if (ch == 'P')
+            {
+                state = ParseState.DCS;
+                seqBuffer.Clear();
+                return;
+            }
+
+            if (ch == '0')
+            {
+                state = ParseState.Esc0;
+                seqBuffer.Clear();
+                return;
+            }
+
+            HandleEscSequence(ch);
+            state = ParseState.Normal;
+        }
+
+        private void HandleCSI(char ch)
+        {
+            seqBuffer.Append(ch);
+            if (ch >= '@' && ch <= '~')
+            {
+                string seq = seqBuffer.ToString();
+                Log($"[CSI] {seq}");
+                HandleCsiSequence(seq);
+                state = ParseState.Normal;
+            }
+        }
+
+        internal async Task HandleDCS(char ch)
+        {
+            seqBuffer.Append(ch);
+            if (ch == '\\')
+            {
+                byte[] payload = Encoding.ASCII.GetBytes(seqBuffer.ToString());
+                ParseDcsPayload(payload);
+
+                string response = GenerateDcsResponse();
+                try
+                {
+                    await tcpClient.SendAsync(response);
+                }
+                catch (Exception ex)
+                {
+                    errorHandler.Handle(ex, "tcpClient.SendAsync i HandleDCS");
+                }
+                try
+                {
+                    if (OutgoingDcs != null)
+                        await OutgoingDcs.Invoke(Encoding.ASCII.GetBytes(response));
+                }
+                catch (Exception ex)
+                {
+                    errorHandler.Handle(ex, "OutgoingDcs.Invoke i HandleDCS");
+                }
+            }
+        }
+
+        private void InitDcsCommands()
+        {
+            dcsCommands["$Q"] = HandleEmacsLayout;
+            dcsCommands["$G"] = data => Logger.Log("[DCS] Set graphics mode ($G) – ignoreras", Logger.LogLevel.Warning);
+            dcsCommands["$B"] = data => Logger.Log("[DCS] Load character set ($B) – ignoreras", Logger.LogLevel.Warning);
+            dcsCommands["$0"] = HandleEmacsReset;
+            dcsCommands["$X"] = data => Logger.Log("[DCS] Specialkommandot $X tolkas", LogLevel.Info);
+        }
+        internal void ParseDcsPayload(byte[] data)
+        {
+            Logger.Log($"[DCS-IN] {BitConverter.ToString(data)}", Logger.LogLevel.Debug);
+            Logger.LogHex(data, data.Length, "DCS Payload");
+
+            if (data.Length == 0)
+            {
+                Logger.Log("[DCS] Tom payload – troligen initsekvens", Logger.LogLevel.Info);
+                return;
+            }
+
+            string ascii = Encoding.ASCII.GetString(data);
+            Logger.Log($"[DCS] ASCII: '{ascii}'", Logger.LogLevel.Info);
+
+            foreach (var kvp in dcsCommands)
+            {
+                if (ascii.StartsWith(kvp.Key))
+                {
+                    kvp.Value.Invoke(data);
+                    return;
+                }
+            }
+
+            errorHandler.Handle("DCS: Okänt kommando – payload dump följer");
+            Logger.LogHex(data, data.Length, "DCS Raw");
+        }
+
+        private void HandleEmacsLayout(byte[] data)
+        {
+            emacsLayout = EmacsLayoutModel.Parse(data);
+            emacsMode = true;
+            Logger.Log($"[EMACS] Layout tolkad – fält: {emacsLayout?.Fields.Count ?? 0}", Logger.LogLevel.Info);
+            EmacsLayoutUpdated?.Invoke();
+        }
+
+        private void HandleEmacsReset(byte[] data)
+        {
+            emacsLayout = null;
+            emacsMode = false;
+            Logger.Log("[DCS] EMACS reset ($0) tolkas", Logger.LogLevel.Info);
+            EmacsLayoutUpdated?.Invoke();
+        }
+
+
+        private void HandleEscSequence(char ch)
+        {
+            switch (ch)
+            {
+                case '$':
+                    return;
+                case 'O':
+                    Log("[ESC $ O] G1 charset satt till Graphics");
+                    return;
+                case 'B':
+                    Log("[ESC $ B] G0 charset satt till ASCII");
+                    return;
+                default:
+                    Log($"[ESC] Okänd sekvens: ESC {ch}");
+                    return;
+            }
+        }
+
+        private void HandleCsiSequence(string seq)
+        {
+            char command = seq[^1]; // sista tecknet
+            if (seq.Length == 1) Logger.Log($"[CSI] Endast kommandotecken: {command}", LogLevel.Debug);
+            if (string.IsNullOrEmpty(seq)) return;
+
+            string parameters = seq.Substring(0, seq.Length - 1);
+
+            if (csiCommandSet.Commands.TryGetValue(command, out var handler))
+            {
+                Log($"[CSI] {command} ← {parameters}");
+                handler.Invoke(parameters);
+
+                // 🟢 Här sätter du flaggan
+                if (command == 'J' && parameters == "2")
+                {
+                    emacsDetectionEnabled = true;
+                    Logger.Log("Emacs-detektering aktiverad efter ESC[2J", LogLevel.Debug);
+                }
+            }
+            else
+            {
+                errorHandler.Handle($"[CSI] Okänt kommando: ESC[{seq} (0x{(int)command:X2})");
+            }
+        }
+
+        private void HandleEsc0(char ch)
+        {
+            seqBuffer.Append(ch);
+
+            if (ch == '!')
+            {
+                string key = seqBuffer.ToString();
+                if (esc0CommandSet.Commands.TryGetValue(key, out var action))
+                {
+                    Log($"[ESC0] {key}");
+                    action.Invoke();
                 }
                 else
                 {
-                    // Före HandleText-anropet
-                    char mapped = usingG1 ? MapFromG1(ch, g1Charset) : MapFromG0(ch, g0Charset);
-
-                    // Logga bara när det är intressant (bank = G1 eller mappningen ändrade tecknet)
-                    if (usingG1 || mapped != ch)
-                    {
-                        Logger.Log(
-                            $"[TEXT] ({screenBuffer.CursorRow},{screenBuffer.CursorCol}) bank={(usingG1 ? "G1" : "G0")} in=0x{(int)ch:X2} out=0x{(int)mapped:X2}",
-                            Logger.LogLevel.Debug
-                        );
-                    }
-
-                    HandleText(mapped);
+                    Log($"[ESC0] Okänd sekvens: {key}");
                 }
-                break;
-
-            case ParseState.Esc:
-                seqCharCount++;
-                if (seqCharCount > 32) // eller annan rimlig gräns
+                state = ParseState.Normal;
+            }
+            else if (ch == '*')
+            {
+                string hex = seqBuffer.ToString();
+                if (esc0CommandSet.HexCommands.TryGetValue(hex, out var hexAction))
                 {
-                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
-                    seqCharCount = 0;
-                }
-                Logger.Log($"[ESC RAW] ESC {ch} (0x{(int)ch:X2})", Logger.LogLevel.Debug);
-                switch (ch)
-                {
-                    case '(':
-                        ChangeState(ParseState.G0Select);
-                        break;
-                    case '`': // ESC `
-                        Logger.Log("[ESC] Ladda ASCII i G0", Logger.LogLevel.Debug);
-                        g0Charset = "ASCII";
-                        ChangeState(ParseState.Normal);
-                        break;
-                    case '$':
-                        Logger.Log("[ESC] Dollar-sekvens start", Logger.LogLevel.Debug);
-                        ChangeState(ParseState.EscDollar);
-                        break;
-                    case '[':
-                        csiBuffer.Clear();
-                        csiStartTime = DateTime.Now; // starttid för CSI
-                        Logger.Log($"[CSI] Startar vid {csiStartTime:HH:mm:ss.fff}", Logger.LogLevel.Debug);
-                        Logger.Log($"[CSI] RAW[{csiBuffer}{ch}", Logger.LogLevel.Debug);
-                        ChangeState(ParseState.Csi);
-                        break;
-                    case 'P':
-                        Logger.Log("[ESC] Startar DCS", Logger.LogLevel.Debug);
-                        dcsBuffer.Clear();
-                        dcsStartTime = DateTime.Now; // starttid för DCS
-                        Logger.Log($"[DCS] Startar vid {dcsStartTime:HH:mm:ss.fff}", Logger.LogLevel.Debug);
-                        ChangeState(ParseState.Dcs);
-                        break;
-                    case 'b':
-                        g0Charset = "ASCII";
-                        Logger.Log("[Charset] G0 satt till ASCII via ESC b", Logger.LogLevel.Debug);
-                        ChangeState(ParseState.Normal);
-                        break;
-                    case '0':
-                        ChangeState(ParseState.Pt200ZeroSymbol);
-                        esc0Buffer.Clear();
-                        break;
-                    case 'c': // Full reset
-                        Logger.Log("[ESC] Full reset mottagen", Logger.LogLevel.Debug);
-                        ResetParserState();
-                        ResetScreenState(); // om du har en metod för att nollställa skärmen
-                        ChangeState(ParseState.Normal);
-                        break;
-                    default:
-                        Logger.Log($"[ESC] Okänd sekvens: 0x{(int)ch:X2}", Logger.LogLevel.Debug);
-                        ChangeState(ParseState.Normal);
-                        break;
-                }
-                break;
-
-            case ParseState.G0Select:
-                seqCharCount++;
-                if (seqCharCount > 32) // eller annan rimlig gräns
-                {
-                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
-                    seqCharCount = 0;
-                }
-                if (ch == 'B')
-                {
-                    g0Charset = "ASCII";
-                    Logger.Log("[Charset] G0 satt till ASCII via ESC (B", Logger.LogLevel.Debug);
-                }
-                else if (ch == '0')
-                {
-                    if (inCommandMode)
-                    {
-                        Logger.Log("[Block] Ignorerar ESC (0 i kommandoläge", Logger.LogLevel.Debug);
-                    }
-                    else
-                    {
-                        g0Charset = "Graphics";
-                        Logger.Log("[Charset] G0 satt till Graphics via ESC (0", Logger.LogLevel.Debug);
-                    }
+                    Log($"[ESC0 HEX] {hex}*");
+                    hexAction.Invoke(hex);
                 }
                 else
                 {
-                    Logger.Log($"[Charset] Okänd G0‑charset: 0x{(int)ch:X2}", Logger.LogLevel.Debug);
+                    Log($"[ESC0 HEX] Okänd hex: {hex}*");
                 }
-                ChangeState(ParseState.Normal);
-                break;
-
-            case ParseState.Pt200ZeroSymbol:
-                seqCharCount++;
-                if (seqCharCount > 32) // eller annan rimlig gräns
-                {
-                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
-                    seqCharCount = 0;
-                }
-                esc0Buffer.Append((char)ch);
-                if (esc0Buffer.Length == 2 && esc0Buffer[1] == '!')
-                {
-                    if (esc0Commands.TryGetValue(esc0Buffer.ToString(), out var action))
-                        action();
-                    else
-                        Logger.Log($"[ESC0] Okänt kommando: {esc0Buffer}", Logger.LogLevel.Debug);
-
-                    ChangeState(ParseState.Normal);
-                }
-                else if (esc0Buffer.Length == 2 && esc0Buffer[1] != '!')
-                {
-                    // Om det ser ut som hex, byt state
-                    ChangeState(ParseState.Pt200ZeroHex);
-                }
-                break;
-
-            case ParseState.Pt200ZeroHex:
-                seqCharCount++;
-                if (seqCharCount > 32) // eller annan rimlig gräns
-                {
-                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
-                    seqCharCount = 0;
-                }
-                esc0Buffer.Append((char)ch);
-                if (esc0Buffer.Length == 3 && esc0Buffer[2] == '*')
-                {
-                    var hex = $"{(byte)esc0Buffer[0]:X2}{(byte)esc0Buffer[1]:X2}";
-                    if (esc0HexCommands.TryGetValue(hex, out var hexAction))
-                        hexAction(hex);
-                    else
-                        Logger.Log($"[ESC0] Okänt hexkommando: {hex}", Logger.LogLevel.Debug);
-
-                    ChangeState(ParseState.Normal);
-                }
-                break;
-
-            case ParseState.EscDollar:
-                if (ch == 'O' || ch == 'G')
-                {
-                    Logger.Log($"[ESC $ {ch}] Ladda PT200-grafik i G1", Logger.LogLevel.Debug);
-                    g1Charset = "Graphics";
-                    // usingG1 styrs av SO (0x0E), det är okej. Om du vill forca: usingG1 = true;
-                }
-                else if (ch == 'B')
-                {
-                    g0Charset = "ASCII";
-                    Logger.Log("[ESC $ B] G0 = ASCII", Logger.LogLevel.Debug);
-                }
-                else
-                {
-                    Logger.Log($"[ESC $] Okänd sekvens: {ch}", Logger.LogLevel.Debug);
-                }
-                ChangeState(ParseState.Normal);
-                break;
-
-            case ParseState.Csi:
-                seqCharCount++;
-                if (seqCharCount > 32) // eller annan rimlig gräns
-                {
-                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
-                    seqCharCount = 0;
-                }
-
-                if (char.IsLetter(ch))
-                {
-                    csiBuffer.Append(ch);
-                    string seq = csiBuffer.ToString();
-                    HandleCSI(seq); // ← kör din riktiga CSI-implementation
-                    ChangeState(ParseState.Normal);
-                }
-                else
-                {
-                    csiBuffer.Append(ch);
-                }
-                break;
-
-            case ParseState.Dcs:
-                seqCharCount++;
-                if (seqCharCount > 32) // eller annan rimlig gräns
-                {
-                    Logger.Log($"[FAILSAFE] Avbryter sekvens i state {state} efter {seqCharCount} tecken", Logger.LogLevel.Debug);
-                    ChangeState(ParseState.Normal);
-                    seqCharCount = 0;
-                }
-                if (ch == 0x1B) ChangeState(ParseState.DcsEsc);
-                else dcsBuffer.Add((byte)ch);
-
-                break;
-
-            case ParseState.DcsEsc:
-                seqCharCount++;
-                if (seqCharCount > 32) { /* failsafe */ }
-
-                if (ch == '\\')
-                {
-                    var duration = DateTime.Now - dcsStartTime;
-                    Logger.Log($"[DCS] Avslutad efter {duration.TotalMilliseconds} ms", Logger.LogLevel.Debug);
-                    var bytes = dcsBuffer.ToArray();
-
-                    // Statusförfrågan (tom payload)
-                    if (bytes.Length == 0)
-                    {
-                        terminalState.DumpDcsDebug();
-                        var reply = terminalState.GenerateDCSResponse();
-                        _ = tcpClient.SendAsync(reply);
-                        _ = tcpClient.SendAsync("\x11"); // XON
-                    }
-                    else
-                    {
-                        // Kör din tolkning här:
-                        Logger.Log($"[DCS] Payload: {BitConverter.ToString(bytes)}", Logger.LogLevel.Debug);
-                        ParseDcsPayload(bytes); // ← viktig
-                    }
-
-                    dcsBuffer.Clear();
-                    ChangeState(ParseState.Normal);
-                }
-                else
-                {
-                    dcsBuffer.Add((byte)0x1B);
-                    dcsBuffer.Add((byte)ch);
-                    ChangeState(ParseState.Dcs);
-                }
-                break;
-        }
-        _ = dcsStartTime;
-        _ = csiStartTime;
-    }
-
-    private void AdvanceLine()
-    {
-        screenBuffer.CursorRow++;
-        if (screenBuffer.CursorRow >= screenBuffer.Rows)
-        {
-            screenBuffer.ScrollUp();
-            screenBuffer.CursorRow = screenBuffer.Rows - 1;
-        }
-    }
-
-    private void HandleText(char ch)
-    {
-        char outChar = ch;
-
-        // Om vi är i grafikläge, logga alltid
-        if (g0Charset == "Graphics" || g1Charset == "Graphics")
-        {
-            string bank = usingG1 ? "G1" : "G0";
-            Logger.Log($"[Graphics Debug] Bank={bank}, Byte=0x{(int)ch:X2} '{(char.IsControl(ch) ? '.' : ch)}'", Logger.LogLevel.Debug);
+                state = ParseState.Normal;
+            }
         }
 
-        // Sniffa första 20 tecken efter force‑G1
-        if (graphicsSniffCount > 0)
+        private void DetectEmacs(char ch)
         {
-            Logger.Log($"[Graphics Sniff] Byte=0x{(int)ch:X2} '{(char.IsControl(ch) ? '.' : ch)}'", Logger.LogLevel.Debug);
-            graphicsSniffCount--;
+            // Enkel EMACS-detektering via textflöde
+            // Du kan förbättra detta med en textbuffer om du vill
+            if (!emacsMode && ch == 'E')
+            {
+                emacsMode = true;
+                Log("[MODE] EMACS mode ON");
+                tcpClient.SendAsync("\x11"); // XON
+                emacsDetectionEnabled = true;
+                Log("[CTRL-OUT] XON (0x11) skickad vid EMACS-start");
+            }
         }
 
-        // G1-grafik
-        if (usingG1 && g1Charset == "Graphics" && g1Map.TryGetValue((byte)ch, out var mapped))
+        private string GenerateDcsResponse()
         {
-            Logger.Log($"[G1 Graphics] Mappade 0x{(int)ch:X2} → '{mapped}'", Logger.LogLevel.Debug);
-            outChar = mapped;
-        }
-        // G0-grafik
-        else if (!usingG1 && g0Charset == "Graphics" && g1Map.TryGetValue((byte)ch, out var mappedG0))
-        {
-            Logger.Log($"[G0 Graphics] Mappade 0x{(int)ch:X2} → '{mappedG0}'", Logger.LogLevel.Debug);
-            outChar = mappedG0;
+            return "\x1B\\";
         }
 
-        switch (ch)
+        private char MapFromG1(char ch)
         {
-            case '\r':
-                screenBuffer.CursorCol = 0;
-                break;
+            return g1Map.TryGetValue((byte)ch, out var mapped) ? mapped : ch;
+        }
 
-            case '\n':
-                screenBuffer.CursorRow++;
-                if (screenBuffer.CursorRow >= screenBuffer.Rows)
+      /*private Dictionary<string, Action> InitEsc0Commands()
+        {
+            return new Dictionary<string, Action>
+            {
+                // ────── Linjer och hörn (tecken + '!')
+                { "#!", () => DrawGraphic('│') }, // vertikal linje
+                { "$!", () => DrawGraphic('─') }, // horisontell linje
+                { "%!", () => DrawGraphic('┌') }, // hörn uppe vänster
+                { "&!", () => DrawGraphic('┐') }, // hörn uppe höger
+                { "'!", () => DrawGraphic('└') }, // hörn nere vänster
+                { "(!", () => DrawGraphic('┘') }, // hörn nere höger
+                { ")!", () => DrawGraphic('├') }, // T‑korsning vänster
+                { "*!", () => DrawGraphic('┤') }, // T‑korsning höger
+                { "+!", () => DrawGraphic('┬') }, // T‑korsning upp
+                { ",!", () => DrawGraphic('┴') }, // T‑korsning ner
+                { "-!", () => DrawGraphic('┼') }, // korsning
+
+                // ────── Statusfält / attribut
+                { "6!", () => screenBuffer.SetCursorPosition(screenBuffer.Rows - 1, 0) }, // flytta till statusrad
+                { "!!", () => { // rensa statusrad
+                    int lastRow = screenBuffer.Rows - 1;
+                    for (int c = 0; c < screenBuffer.Cols; c++)
+                        screenBuffer.WriteChar(lastRow, c, ' ');
+                }},
+                //{ "\"!", () => { /* Set status field attributes – kan implementeras  } },
+
+                // ────── Symboler (tecken + '!')
+                { "A!", () => DrawGraphic('★') },
+                { "B!", () => DrawGraphic('☆') },
+                { "C!", () => DrawGraphic('●') },
+                { "D!", () => DrawGraphic('○') },
+                { "E!", () => DrawGraphic('◆') },
+                { "F!", () => DrawGraphic('◇') },
+                { "G!", () => DrawGraphic('▲') },
+                { "H!", () => DrawGraphic('▼') },
+                { "I!", () => DrawGraphic('►') },
+                { "J!", () => DrawGraphic('◄') },
+                { "\"!", () => {
+                    // Set status field attributes – i EMACS används den ofta före text på statusraden.
+                    // Vi kan välja att ignorera den visuellt, men det kan vara bra att nollställa ev. attribut.
+                    screenBuffer.ResetAttributes();
+                                }},
+            };
+        }
+
+        private Dictionary<string, Action<string>> InitEsc0HexCommands()
+        {
+            // Hex-koderna är de som skickas som två hextecken följt av '*'
+            // Vi tar emot själva hexdelen som string (t.ex. "69") och kan använda den
+            return new Dictionary<string, Action<string>>
                 {
-                    screenBuffer.ScrollUp();
-                    screenBuffer.CursorRow = screenBuffer.Rows - 1;
-                }
-                break;
+                    { "69", _ => DrawGraphic('█') }, // full block
+                    { "6A", _ => DrawGraphic('▄') }, // lower half block
+                    { "6B", _ => DrawGraphic('▀') }, // upper half block
+                    { "6C", _ => DrawGraphic('▒') }, // medium shade
+                    { "6D", _ => DrawGraphic('░') }, // light shade
+                    { "6E", _ => DrawGraphic('▓') }, // dark shade
+                    // Här kan du fylla på fler hexkoder från PT200-manualen vid behov
+                };
+        }*/
 
-            default:
-                screenBuffer.WriteChar(screenBuffer.CursorRow, screenBuffer.CursorCol, outChar);
-                screenBuffer.CursorCol++;
-                if (screenBuffer.CursorCol >= screenBuffer.Cols)
-                {
-                    screenBuffer.CursorCol = 0;
-                    screenBuffer.CursorRow++;
-                    if (screenBuffer.CursorRow >= screenBuffer.Rows)
-                    {
-                        screenBuffer.ScrollUp();
-                        screenBuffer.CursorRow = screenBuffer.Rows - 1;
-                    }
-                }
-                break;
-        }
-    }
-
-    private void HandleCSI(string csi)
-    {
-        Logger.Log($"[HandleCSI] {csi}", LogLevel.Debug);
-        char command = csi[^1];
-        string paramString = csi.Length > 1 ? csi[..^1] : string.Empty;
-        string[] parts = string.IsNullOrEmpty(paramString)
-            ? Array.Empty<string>()
-            : paramString.Split(';', StringSplitOptions.RemoveEmptyEntries)
-                         .Select(p => p.TrimStart('>', '?')).ToArray();
-
-        switch (command)
+        private Dictionary<byte, char> InitG1Map()
         {
-            case 'H':
-            case 'f':
-                int row = parts.Length > 0 && int.TryParse(parts[0], out var r) ? r : 1;
-                int col = parts.Length > 1 && int.TryParse(parts[1], out var c) ? c : 1;
-                screenBuffer.SetCursorPosition(row - 1, col - 1);
-
-                if (row == 22 && col == 1)
-                    Logger.Log("[EMACS] Prompt aktiv – vänta på tangent", Logger.LogLevel.Info);
-                break;
-            case 'J':
-                int mode = parts.Length > 0 && int.TryParse(parts[0], out var m) ? m : 0;
-                screenBuffer.Clear(mode);
-                break;
-            case 'K':
-                int modeK = parts.Length > 0 && int.TryParse(parts[0], out var mk) ? mk : 0;
-                screenBuffer.ClearLine(modeK);
-                break;
-            case 'm':
-                if (parts.Length == 0) { screenBuffer.ResetAttributes(); break; }
-                foreach (var p in parts)
-                    if (int.TryParse(p, out var code))
-                        if (code == 0) screenBuffer.ResetAttributes();
-                        else if (code == 7) screenBuffer.SetReverse(true);
-                        else if (code == 27) screenBuffer.SetReverse(false);
-                break;
-        }
-    }
-
-    private Dictionary<string, Action> InitEsc0Commands()
-    {
-        return new Dictionary<string, Action>
-    {
-        // ────── Linjer och hörn (tecken + '!')
-        { "#!", () => DrawGraphic('│') }, // vertikal linje
-        { "$!", () => DrawGraphic('─') }, // horisontell linje
-        { "%!", () => DrawGraphic('┌') }, // hörn uppe vänster
-        { "&!", () => DrawGraphic('┐') }, // hörn uppe höger
-        { "'!", () => DrawGraphic('└') }, // hörn nere vänster
-        { "(!", () => DrawGraphic('┘') }, // hörn nere höger
-        { ")!", () => DrawGraphic('├') }, // T‑korsning vänster
-        { "*!", () => DrawGraphic('┤') }, // T‑korsning höger
-        { "+!", () => DrawGraphic('┬') }, // T‑korsning upp
-        { ",!", () => DrawGraphic('┴') }, // T‑korsning ner
-        { "-!", () => DrawGraphic('┼') }, // korsning
-
-        // ────── Statusfält / attribut
-        { "6!", () => screenBuffer.SetCursorPosition(screenBuffer.Rows - 1, 0) }, // flytta till statusrad
-        { "!!", () => { // rensa statusrad
-            int lastRow = screenBuffer.Rows - 1;
-            for (int c = 0; c < screenBuffer.Cols; c++)
-                screenBuffer.WriteChar(lastRow, c, ' ');
-        }},
-        //{ "\"!", () => { /* Set status field attributes – kan implementeras */ } },
-
-        // ────── Symboler (tecken + '!')
-        { "A!", () => DrawGraphic('★') },
-        { "B!", () => DrawGraphic('☆') },
-        { "C!", () => DrawGraphic('●') },
-        { "D!", () => DrawGraphic('○') },
-        { "E!", () => DrawGraphic('◆') },
-        { "F!", () => DrawGraphic('◇') },
-        { "G!", () => DrawGraphic('▲') },
-        { "H!", () => DrawGraphic('▼') },
-        { "I!", () => DrawGraphic('►') },
-        { "J!", () => DrawGraphic('◄') },
-        { "\"!", () => {
-            // Set status field attributes – i EMACS används den ofta före text på statusraden.
-            // Vi kan välja att ignorera den visuellt, men det kan vara bra att nollställa ev. attribut.
-            screenBuffer.ResetAttributes();
-                        }},
-        };
-    }
-    private Dictionary<string, Action<string>> InitEsc0HexCommands()
-    {
-        // Hex-koderna är de som skickas som två hextecken följt av '*'
-        // Vi tar emot själva hexdelen som string (t.ex. "69") och kan använda den
-        return new Dictionary<string, Action<string>>
-        {
-            { "69", _ => DrawGraphic('█') }, // full block
-            { "6A", _ => DrawGraphic('▄') }, // lower half block
-            { "6B", _ => DrawGraphic('▀') }, // upper half block
-            { "6C", _ => DrawGraphic('▒') }, // medium shade
-            { "6D", _ => DrawGraphic('░') }, // light shade
-            { "6E", _ => DrawGraphic('▓') }, // dark shade
-            // Här kan du fylla på fler hexkoder från PT200-manualen vid behov
-        };
-    }
-
-    private Dictionary<byte, char> InitG1Map()
-    {
-        return new Dictionary<byte, char>
+            return new Dictionary<byte, char>
         {
             { 0x21, '│' }, { 0x22, '─' }, { 0x23, '┌' }, { 0x24, '┐' },
             { 0x25, '└' }, { 0x26, '┘' }, { 0x27, '├' }, { 0x28, '┤' },
@@ -624,104 +442,21 @@ public class EscapeSequenceParser
             { 0x35, '◄' }, { 0x36, '★' }, { 0x37, '☆' }, { 0x38, '●' },
             { 0x39, '○' }, { 0x3A, '◆' }, { 0x3B, '◇' }
         };
-    }
-
-    private void DrawGraphic(char ch)
-    {
-        Logger.Log($"Put '{ch}' at ({screenBuffer.CursorRow},{screenBuffer.CursorCol})", Logger.LogLevel.Debug);
-        screenBuffer.WriteChar(screenBuffer.CursorRow, screenBuffer.CursorCol, ch);
-        screenBuffer.CursorCol++;
-        if (screenBuffer.CursorCol >= screenBuffer.Cols)
-        {
-            screenBuffer.CursorCol = 0;
-            AdvanceLine();
         }
-    }
-
-    internal void ParseDcsPayload(byte[] data)
-    {
-        Logger.Log($"[DCS-IN] {BitConverter.ToString(data)}", Logger.LogLevel.Debug);
-        Logger.LogHex(data, data.Length, "DCS Payload");
-        Logger.Log($"[DCS] Payload-längd: {data.Length}", LogLevel.Info);
-        if (data.Length == 0)
+        private void Log(string msg)
         {
-            Logger.Log("[DCS] Tom payload – troligen initsekvens", Logger.LogLevel.Info);
-            return;
+            if (EnableParserDebug && Logger.IsEnabled(Logger.LogLevel.Debug))
+                Logger.Log(msg, Logger.LogLevel.Debug);
         }
 
-        string ascii = Encoding.ASCII.GetString(data);
-        Logger.Log($"[DCS] ASCII: '{ascii}'", Logger.LogLevel.Info);
-
-        if (ascii.StartsWith("$Q") || ascii.StartsWith("$G"))
+        private void HandleBreak()
         {
-            EmacsMode = true;
-            Logger.LogHex(data, data.Length, "Riktig $Q-payload");
-            Logger.Log($"[EMACS] Layout tolkad – fält: {emacsLayout?.Fields.Count ?? 0}", Logger.LogLevel.Info);
-            EmacsLayoutUpdated?.Invoke();
-        }
-
-        // Identifiera kommandon
-        if (ascii.StartsWith("$Q"))
-        {
-            Logger.Log("[DCS] EMACS layout ($Q) tolkas", Logger.LogLevel.Info);
-            emacsLayout = EmacsLayoutModel.Parse(data);
-            EmacsMode = true;
-        }
-        else if (ascii.StartsWith("$G"))
-        {
-            Logger.Log("[DCS] Kommando: Set graphics mode ($G) – ignoreras", Logger.LogLevel.Warning);
-            return;
-        }
-        else if (ascii.StartsWith("$B"))
-        {
-            Logger.Log("[DCS] Kommando: Load character set ($B) – ignoreras", Logger.LogLevel.Warning);
-            return;
-        }
-        else if (ascii.StartsWith("$0"))
-        {
-            Logger.Log("[DCS] EMACS reset ($0) tolkas", Logger.LogLevel.Info);
             emacsLayout = null;
-            EmacsMode = false;
+            emacsMode = false;
             EmacsLayoutUpdated?.Invoke();
+            screenBuffer.Clear();
+            screenBuffer.SetCursorPosition(0, 0);
+            Logger.Log("[BREAK] Terminalen har nollställts", Logger.LogLevel.Info);
         }
-        else
-        {
-            Logger.Log("[DCS] Okänt kommando – payload dump följer", Logger.LogLevel.Warning);
-            Logger.LogHex(data, data.Length, "DCS Raw");
-        }
-    }
-
-    private void ResetParserState()
-    {
-        state = ParseState.Normal;
-        seqCharCount = 0;           // om du använder failsafe-räknaren
-        csiBuffer.Clear();
-        dcsBuffer.Clear();
-        esc0Buffer.Clear();
-        usingG1 = false;            // om du har G0/G1-växling
-                                    // Återställ ev. andra parserflaggor här
-    }
-
-    private void ResetScreenState()
-    {
-        screenBuffer.Clear();       // rensa hela skärmen
-        screenBuffer.SetCursorPosition(0, 0);
-        screenBuffer.ResetAttributes();
-        // Återställ ev. färger, scrollregioner, wrap-mode etc.
-    }
-
-    private char MapFromG0(char ch, string charset)
-    {
-        // Här kan du lägga in mappningstabell för G0 om det behövs
-        // Just nu: returnera tecknet oförändrat
-        return ch;
-    }
-
-     private char MapFromG1(char ch, string charset)
-    {
-        if (charset == "Graphics" && g1Map.TryGetValue((byte)ch, out var mapped))
-            return mapped;
-
-        return ch;
     }
 }

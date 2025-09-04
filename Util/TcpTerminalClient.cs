@@ -5,10 +5,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using PT200Emulator.Core;
 using PT200Emulator.Util; // för Logger
+using PT200Emulator.Interfaces;
 
 namespace PT200Emulator.Util
 {
-    public class TcpTerminalClient
+    public class TcpTerminalClient : ITerminalClient
     {
         private readonly EscapeSequenceParser parser;
         private TcpClient client;
@@ -103,7 +104,7 @@ namespace PT200Emulator.Util
                         }
 
                         // Vanlig data → mata parsern
-                        parser.Feed((char)b);
+                        await parser.Feed((char)b);
                     }
 
                     // Mode‑detektering med timer

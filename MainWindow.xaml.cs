@@ -1,4 +1,6 @@
 ﻿using PT200Emulator.Core;
+using PT200Emulator.IO;
+using PT200Emulator.Models;
 using PT200Emulator.Util;
 using System;
 using System.Globalization;
@@ -14,8 +16,8 @@ using System.Windows.Media.Media3D;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using static PT200Emulator.Core.PT200State;
+using static PT200Emulator.IO.ControlCharacterHandler;
 using static PT200Emulator.Util.Logger;
-using PT200Emulator.Models;
 
 namespace PT200Emulator.UI
 {
@@ -36,7 +38,8 @@ namespace PT200Emulator.UI
         private readonly Queue<string> statusHistory = new Queue<string>();
         private const int MaxStatusHistory = 50;
         private bool promptWasMarkedLastFrame = false;
-        private static EmacsLayoutModel emacsLayout;
+        private static EmacsLayoutModel EmacsLayout;
+        private readonly ControlCharacterHandler controlHandler = new();
 
         public MainWindow()
         {
@@ -44,7 +47,7 @@ namespace PT200Emulator.UI
             ConsoleManager.Open();
             StartCursorBlink();
             cursorVisible = true;
-            emacsLayout = new EmacsLayoutModel();
+            EmacsLayout = new EmacsLayoutModel();
             Logger.CurrentLevel = Logger.LogLevel.Debug; // Behövs just nu för att få all information i loggen
 
             // Skapa state först
@@ -74,10 +77,20 @@ namespace PT200Emulator.UI
                 _ => 24
             };
 
+            controlHandler.RawOutput += async bytes =>
+            {
+                Logger.LogHex(bytes, bytes.Length, "RAW");
+                await tcpClient.SendAsync(bytes);
+            };
+            controlHandler.BreakReceived += () =>
+            {
+                Logger.Log("BREAK mottagen (Ctrl+P)", LogLevel.Info);
+            };
+
             // Skapa buffert och parser
             screenBuffer = new ScreenBuffer(cols, rows);
             // Skapa parsern
-            parser = new EscapeSequenceParser(screenBuffer);
+            parser = new EscapeSequenceParser(tcpClient, screenBuffer);
             tcpClient = new TcpTerminalClient(parser);
 
             // Koppla parserns event till klientens SendAsync
@@ -120,6 +133,11 @@ namespace PT200Emulator.UI
             ApplyDisplayTheme(DisplayType.Green);
 
             // RunParserSelfTest();
+        }
+
+        private void ControlHandler_BreakReceived()
+        {
+            throw new NotImplementedException();
         }
 
         private void ApplyDisplayTheme(DisplayType type)
@@ -174,11 +192,37 @@ namespace PT200Emulator.UI
         private async void Window_KeyDown(object sender, KeyEventArgs e)
         {
             // Ctrl + [A-Z] → kontrolltecken 0x01–0x1A
-            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) &&
-                e.Key >= Key.A && e.Key <= Key.Z)
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
             {
-                char ctrlChar = (char)((int)e.Key - (int)Key.A + 1);
-                await tcpClient.SendAsync(new string(ctrlChar, 1));
+                if (e.Key >= Key.A && e.Key <= Key.Z)
+                {
+                    char ctrlChar = (char)((int)e.Key - (int)Key.A + 1);
+                    var result = controlHandler.Handle(ctrlChar);
+
+                    if (result != ControlCharacterResult.NotHandled)
+                    {
+                        Logger.Log($"[KEY] Kontrolltecken: {result}", LogLevel.Debug);
+                        await tcpClient.SendAsync(new string(ctrlChar, 1));
+                        e.Handled = true;
+                        return;
+                    }
+                }
+                else if (e.Key == Key.OemOpenBrackets) // Ctrl+[ → ESC
+                {
+                    await tcpClient.SendAsync("\x1B");
+                    e.Handled = true;
+                    return;
+                }
+                else if (e.Key == Key.D2) // Ctrl+@ → 0x00
+                {
+                    await tcpClient.SendAsync("\0");
+                    e.Handled = true;
+                    return;
+                }
+            }
+            else if (e.Key == Key.P && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            {
+                await tcpClient.SendAsync(new string((char)0x10, 1)); // Ctrl+P = 0x10
                 e.Handled = true;
                 return;
             }
@@ -297,6 +341,16 @@ namespace PT200Emulator.UI
             }
         }
 
+        int GetModCode()
+        {
+            int code = 1;
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) code += 1;
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) code += 2;
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) code += 4;
+            return code;
+        }
+
+
         private async void Window_TextInput(object sender, TextCompositionEventArgs e)
         {
             string input = e.Text;
@@ -372,16 +426,16 @@ namespace PT200Emulator.UI
                 promptWasMarkedLastFrame = false;
             }
 
-            if (parser.EmacsMode && parser.emacsLayout != null)
+            if (parser.EmacsMode && parser.EmacsLayout != null)
             {
-                Logger.Log($"[UI] EMACS-läge: {parser.EmacsMode}, Fält: {parser.emacsLayout?.Fields.Count ?? 0}", LogLevel.Debug);
-                if (parser.emacsLayout?.IsActive == true)
+                Logger.Log($"[UI] EMACS-läge: {parser.EmacsMode}, Fält: {parser.EmacsLayout?.Fields.Count ?? 0}", LogLevel.Debug);
+                if (parser.EmacsLayout?.IsActive == true)
                 {
-                    Logger.Log($"[UI] UpdateTerminalDisplay – EMACS aktiv: {parser.EmacsMode}, layout: {(parser.emacsLayout == null ? "null" : "fylld")}", LogLevel.Info);
-                    foreach (var field in parser.emacsLayout.Fields)
+                    Logger.Log($"[UI] UpdateTerminalDisplay – EMACS aktiv: {parser.EmacsMode}, layout: {(parser.EmacsLayout == null ? "null" : "fylld")}", LogLevel.Info);
+                    foreach (var field in parser.EmacsLayout.Fields)
                     {
                         Logger.Log($"[UI] Fält: rad={field.Row}, kol={field.Col}, längd={field.Length}", LogLevel.Debug);
-                        Logger.Log($"[EMACS] Fält tolkade: {parser.emacsLayout?.Fields.Count ?? 0}", LogLevel.Info);
+                        Logger.Log($"[EMACS] Fält tolkade: {parser.EmacsLayout?.Fields.Count ?? 0}", LogLevel.Info);
 
                         /*var label = new TextBlock
                         {
@@ -423,7 +477,7 @@ namespace PT200Emulator.UI
             }
             var emstatus = new TextBlock
             {
-                Text = $"EMACS: {(parser.EmacsMode ? "Aktiv" : "Inaktiv")}, Fält: {parser.emacsLayout?.Fields.Count ?? 0}",
+                Text = $"EMACS: {(parser.EmacsMode ? "Aktiv" : "Inaktiv")}, Fält: {parser.EmacsLayout?.Fields.Count ?? 0}",
                 Foreground = Brushes.Green,
                 FontSize = 12
             };
@@ -511,14 +565,14 @@ namespace PT200Emulator.UI
 
         }
 
-        private void SendDCS(string data)
+        private async Task SendDCS(string data)
         {
-            parser.Feed('\x1B');
-            parser.Feed('P');
+            await parser.Feed('\x1B');
+            await parser.Feed('P');
             foreach (var ch in data)
-                parser.Feed(ch);
-            parser.Feed('\x1B');
-            parser.Feed('\\');
+                await parser.Feed(ch);
+            await parser.Feed('\x1B');
+            await parser.Feed('\\');
         }
 
         private void SaveStatusHistory_Click(object sender, RoutedEventArgs e)

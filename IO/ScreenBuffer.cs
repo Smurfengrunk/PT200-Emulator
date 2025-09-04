@@ -1,7 +1,8 @@
-﻿using PT200Emulator.Util;
+﻿using PT200Emulator.Interfaces;
+using PT200Emulator.Util;
 using System.Windows.Media;
 
-public class ScreenBuffer
+public class ScreenBuffer : IScreenBuffer
 {
     public class Cell
     {
@@ -92,6 +93,62 @@ public class ScreenBuffer
             Background = bg,
             Blink = blink
         };
+    }
+
+    public void WriteChar(int row, int col, char ch)
+    {
+        Logger.Log($"[Buffer] ({row},{col}) = '{ch}'", Logger.LogLevel.Debug);
+
+        var fg = reverseVideo ? currentBackground : currentForeground;
+        var bg = reverseVideo ? currentForeground : currentBackground;
+
+        buffer[row, col] = new Cell
+        {
+            Character = ch,
+            Foreground = fg,
+            Background = bg,
+            Blink = false
+        };
+    }
+
+
+    public void WriteChar(char ch)
+    {
+        Logger.Log($"[Buffer] ({CursorRow},{CursorCol}) = '{ch}'", Logger.LogLevel.Debug);
+
+        var fg = reverseVideo ? currentBackground : currentForeground;
+        var bg = reverseVideo ? currentForeground : currentBackground;
+
+        buffer[CursorRow, CursorCol] = new Cell
+        {
+            Character = ch,
+            Foreground = fg,
+            Background = bg,
+            Blink = false
+        };
+
+        AdvanceCursor();
+    }
+    private bool IsStatusRow => CursorRow == Rows - 1;
+
+    private void AdvanceCursor()
+    {
+        CursorCol++;
+        if (CursorCol >= Cols)
+        {
+            CursorCol = 0;
+            CursorRow++;
+            if (CursorRow >= Rows - 1) // håll sista raden orörd
+            {
+                ScrollUp();
+            }
+        }
+    }
+
+    public void MoveCursorHome()
+    {
+        CursorRow = 0;
+        CursorCol = 0;
     }
 
     public string[] GetAllLines()
