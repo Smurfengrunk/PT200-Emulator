@@ -21,6 +21,8 @@
                 <Button x:Name="GreenDisplay" Content="Grön" Click="SetGreenDisplay" Margin="0,5,0,5" Focusable="False"/>
                 <Button x:Name="AmberDisplay" Content="Amber" Click="SetAmberDisplay" Margin="0,5,0,5" Focusable="False"/>
                 <Button x:Name="ColorDisplay" Content="Färg" Click="SetFullColorDisplay" Margin="0,5,0,5" Focusable="False"/>
+                <Button x:Name="SendTestA" Content="Skicka test-A" Click="SendTestA_Click" Margin="0,5,0,5" Focusable="False" />
+                <Button Content="Visa statustext" Click="ShowStatus_Click" Margin="0,5,0,5" Focusable="False" />
                 <Button Content="Spara historik" Click="SaveStatusHistory_Click" Margin="0,5,0,5" Focusable="False"/>
                 <Button Content="Toggle Console" Click="ToggleConsole_Click" Margin="0,5,0,20" Focusable="False"/>
 

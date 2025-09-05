@@ -7,6 +7,7 @@ using PT200Emulator.Util;
 using System;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 using System.Windows;
@@ -20,19 +21,22 @@ using System.Windows.Threading;
 using static PT200Emulator.Core.PT200State;
 using static PT200Emulator.Protocol.ControlCharacterHandler;
 using static PT200Emulator.Util.Logger;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace PT200Emulator.UI
 {
+
     public partial class MainWindow : Window
     {
         private PT200State state;
         private DispatcherTimer clockTimer;
         private DispatcherTimer cursorTimer;
+        private DispatcherTimer idleTimer;
         private bool cursorVisible = true;
         private DisplayType currentDisplayType = DisplayType.White;
         private ScreenBuffer screenBuffer;
         private EscapeSequenceParser parser;
-        private TcpTerminalClient tcpClient; // instansen vi använder i eventhandlers
+        private ITerminalClient tcpClient; // instansen vi använder i eventhandlers
         static double fontSize = 14;
         static double lineHeight = fontSize + 2;
         static double charWidth = 8; // Justera efter fonten
@@ -44,13 +48,27 @@ namespace PT200Emulator.UI
         private readonly ControlCharacterHandler controlHandler = new();
         internal AttributeTracker attr = new AttributeTracker();
         private ThemeManager themeManager;
-
+        private TerminalSessionManager session;
+        private System.Net.IPAddress host = System.Net.IPAddress.Loopback; // localhost
+        private int port = 2323; // Justera efter din WSL-setup
+        private bool _terminalReady;
+        private string MainWindow_Statustext;
+        private Brush MainWindow_StatustextColor = Brushes.OrangeRed;
+        private bool terminalReady
+        {
+            get => _terminalReady;
+            set
+            {
+                _terminalReady = value;
+                Logger.Log($"terminalReady satt till: {value}", LogLevel.Info);
+            }
+        }
         public MainWindow()
         {
             InitializeComponent();
+            ConsoleManager.Open();
             attr = new AttributeTracker();
             themeManager = new ThemeManager(attr, TerminalCanvas, StatusText, ClockTextBlock);
-            ConsoleManager.Open();
             StartCursorBlink();
             cursorVisible = true;
             EmacsLayout = new EmacsLayoutModel();
@@ -82,48 +100,10 @@ namespace PT200Emulator.UI
                 PT200State.ScreenFormat.S132x27 => 27,
                 _ => 24
             };
-
-            controlHandler.RawOutput += async bytes =>
-            {
-                Logger.LogHex(bytes, bytes.Length, "RAW");
-                await tcpClient.SendAsync(bytes);
-            };
-            controlHandler.BreakReceived += () =>
-            {
-                Logger.Log("BREAK mottagen (Ctrl+P)", LogLevel.Info);
-            };
-
-            // Skapa buffert och parser
             screenBuffer = new ScreenBuffer(cols, rows, attr);
-            // Skapa parsern
-            parser = new EscapeSequenceParser(tcpClient, screenBuffer);
-            tcpClient = new TcpTerminalClient(parser);
+            Logger.Log($"MainWindow instans skapad – terminalReady initialt: {terminalReady}", LogLevel.Info);
+            Logger.Log($"MainWindow körs på instans – Hash: {this.GetHashCode()}", LogLevel.Info);
 
-            // Koppla parserns event till klientens SendAsync
-            parser.OutgoingDcs += async bytes =>
-            {
-                await tcpClient.SendAsync(bytes);
-            };
-            parser.OutgoingRaw += async bytes =>
-            {
-                Logger.Log($"[TX MainWindow] Skickar {bytes.Length} bytes: {BitConverter.ToString(bytes)}", LogLevel.Info);
-                Logger.LogHex(bytes, bytes.Length, "RAW");
-                await tcpClient.SendAsync(bytes);
-            };
-
-            parser.EmacsLayoutUpdated += () =>
-            {
-                Dispatcher.Invoke(() => UpdateTerminalDisplay());
-            };
-
-            // Uppdatera UI när data kommer in från WSL/Primos
-            tcpClient.DataReceived += () =>
-            {
-                Dispatcher.Invoke(UpdateTerminalDisplay);
-            };
-
-            // Starta anslutningen (justera port/host efter din WSL-setup)
-            _ = tcpClient.ConnectAsync("localhost", 2323);
             // Initiera klockan
             clockTimer = new DispatcherTimer
             {
@@ -135,11 +115,43 @@ namespace PT200Emulator.UI
             };
             clockTimer.Start();
 
-            // Rita första gången
-            ApplyDisplayTheme(DisplayType.Green);
-            UpdateTerminalDisplay();
+            MainWindow_StatustextColor = terminalReady ? Brushes.Black : Brushes.Red;
+            MainWindow_Statustext = terminalReady ? "✅ Terminalen är redo" : "⏳ Terminalen laddar...";
 
             // RunParserSelfTest();
+        }
+
+        private async void SendTestA_Click(object sender, RoutedEventArgs e)
+        {
+            if (terminalReady && tcpClient != null)
+            {
+                Logger.Log("Försöker skicka 'A'...", LogLevel.Debug);
+
+                try
+                {
+                    var sendTask = tcpClient.SendAsync("A");
+                    if (await Task.WhenAny(sendTask, Task.Delay(1000)) == sendTask)
+                    {
+                        Logger.Log("Skickade 'A' inom timeout", LogLevel.Info);
+                    }
+                    else
+                    {
+                        Logger.Log("⚠️ SendAsync timeout – ingen respons", LogLevel.Warning);
+                        tcpClient = null;
+                        terminalReady = false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"💥 SendAsync misslyckades: {ex.Message}", LogLevel.Error);
+                    tcpClient = null;
+                    terminalReady = false;
+                }
+            }
+            else
+            {
+                Logger.Log("❌ Testknapp kunde inte skicka – terminalen är inte redo", LogLevel.Warning);
+            }
         }
 
         private void ApplyDisplayTheme(DisplayType type)
@@ -154,49 +166,176 @@ namespace PT200Emulator.UI
         private void SetGreenDisplay(object sender, RoutedEventArgs e) => ApplyDisplayTheme(DisplayType.Green);
         private void SetAmberDisplay(object sender, RoutedEventArgs e) => ApplyDisplayTheme(DisplayType.Amber);
         private void SetFullColorDisplay(object sender, RoutedEventArgs e) => ApplyDisplayTheme(DisplayType.FullColor);
-        private void Window_Loaded(object sender, RoutedEventArgs e)
+
+        private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            ApplyDisplayTheme(DisplayType.Green); // eller valfritt
+            try
+            {
+                Logger.Log("🚪 Window_Loaded startar", LogLevel.Info);
+                idleTimer = new DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(30)
+                };
+                idleTimer.Tick += (s, e) =>
+                {
+                    Logger.Log("🕒 30 sekunder utan input – sessionen kan ha stängt", LogLevel.Warning);
+                };
+                idleTimer.Start();
+                DispatcherTimer keepAlive = new DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(20)
+                };
 
-            /*screenBuffer.MoveCursorHome();
+                keepAlive.Tick += async (s, e) =>
+                {
+                    if (terminalReady && tcpClient != null)
+                    {
+                        try
+                        {
+                            await tcpClient.SendAsync(""); // eller "\0" om värddatorn accepterar det
+                            Logger.Log("🔄 Keep-alive skickad", Logger.LogLevel.Debug);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Log($"💥 Keep-alive misslyckades: {ex.Message}", Logger.LogLevel.Warning);
+                            tcpClient = null;
+                            terminalReady = false;
+                        }
+                    }
+                };
 
-            //attr.SetForeground(Brushes.LimeGreen);
-            //attr.SetBackground(Brushes.DarkBlue);
+                keepAlive.Start();
 
-            screenBuffer.WriteChar('L');
-            screenBuffer.WriteChar('o');
-            screenBuffer.WriteChar('g');
-            screenBuffer.WriteChar('i');
-            screenBuffer.WriteChar('n');
-            screenBuffer.WriteChar(':');
-            screenBuffer.WriteChar(' ');
-            screenBuffer.WriteChar('\n');
+                Logger.Log($"Fönstret har fokus: {this.IsFocused}", LogLevel.Info);
+                ApplyDisplayTheme(DisplayType.Green); // eller valfritt
 
-            screenBuffer.WriteChar('>');
-            screenBuffer.WriteChar(' ');
-            screenBuffer.WriteChar('E');
-            screenBuffer.WriteChar('n');
-            screenBuffer.WriteChar('t');
-            screenBuffer.WriteChar('e');
-            screenBuffer.WriteChar('r');
-            screenBuffer.WriteChar(' ');
-            screenBuffer.WriteChar('p');
-            screenBuffer.WriteChar('a');
-            screenBuffer.WriteChar('s');
-            screenBuffer.WriteChar('s');
-            screenBuffer.WriteChar('w');
-            screenBuffer.WriteChar('o');
-            screenBuffer.WriteChar('r');
-            screenBuffer.WriteChar('d');
-            screenBuffer.WriteChar(':');
-            screenBuffer.WriteChar('\n');*/
+                session = new TerminalSessionManager(
+                    host,
+                    port,
+                    screenBuffer,
+                    text => Dispatcher.BeginInvoke(UpdateTerminalDisplay),
+                    () => Dispatcher.BeginInvoke(UpdateTerminalDisplay)
+                );
+                Dispatcher.Invoke(() =>
+                {
+                    StatusText.Foreground = Brushes.LightGreen;
+                    StatusText.Text = "Ansluten";
+                    Logger.Log($"[Window_Loaded] StatusText-instans: {StatusText.GetHashCode()}", Logger.LogLevel.Info);
+                    Logger.Log($"[Window_Loaded] StatusText.Text: \"{StatusText.Text}\"", Logger.LogLevel.Info);
+                });
 
-            Keyboard.Focus(this); // Se till att fönstret har fokus
+                bool connected = await session.ConnectAsync();
+                if (connected)
+                {
+                    await session.StartSessionAsync();
+
+                    await Task.Delay(500); // Vänta 0.5 sek efter StartSessionAsync
+                    terminalReady = true;
+                    //tcpClient = session.Client;
+                    InitializeTerminalSession();
+                    Logger.Log($"tcpClient tilldelad – Hash: {tcpClient?.GetHashCode() ?? -1}", LogLevel.Info);
+                    parser = session.Parser;
+                    controlHandler.RawOutput += async bytes =>
+                    {
+                        if (tcpClient != null)
+                        {
+                            Logger.LogHex(bytes, bytes.Length, "RAW");
+                            try
+                            {
+                                Logger.Log($"RawOutput triggas – skickar {bytes.Length} byte", LogLevel.Debug);
+                                //await tcpClient.SendAsync(bytes);
+                                await ((TcpTerminalClient)tcpClient).SendAsync(bytes);
+                                Logger.Log("RawOutput-anrop till SendAsync är klar", LogLevel.Debug);
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.Log($"💥 SendAsync misslyckades: {ex.Message}", LogLevel.Error);
+                                tcpClient = null;
+                                terminalReady = false;
+                            }
+                        }
+                        else
+                        {
+                            Logger.Log("Kan inte skicka data – tcpClient är null", Logger.LogLevel.Warning);
+                        }
+                    };
+                    controlHandler.BreakReceived += () =>
+                    {
+                        Logger.Log("BREAK mottagen (Ctrl+P)", LogLevel.Info);
+                    };
+
+                    terminalReady = true;
+                    Logger.Log("✅ terminalReady satt till true", LogLevel.Info);
+
+                    Logger.Log(session.GetSessionStatus(), Logger.LogLevel.Info);
+                    RunTerminalSanityReport();
+
+                    ApplyDisplayTheme(DisplayType.Green);
+                    UpdateTerminalDisplay();
+                    StatusText.Foreground = MainWindow_StatustextColor;
+                    MainWindow_Statustext = "| Ansluten";
+                }
+                else
+                {
+                    StatusText.Foreground = Brushes.Red;
+                    MainWindow_Statustext = "| Ej ansluten";
+                }
+                Logger.Log($"[Window_Loaded] StatusText-instans: {StatusText.GetHashCode()}", Logger.LogLevel.Info);
+                Logger.Log($"[Window_Loaded] StatusText.Text: \"{StatusText.Text}\"", Logger.LogLevel.Info);
+                this.Focus(); // Försök ge fönstret keyboard-fokus
+                Keyboard.Focus(this); // Dubbel säkerhet
+                Logger.Log("MainWindow har fått fokus", LogLevel.Info);
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"💥 Window_Loaded kraschade: {ex.Message}", LogLevel.Error);
+                StatusText.Foreground = Brushes.Red;
+                StatusText.Text = "Fel vid anslutning";
+                terminalReady = false;
+            }
+            Logger.Log($"[Window_Loaded] StatusText-instans: {StatusText.GetHashCode()}", Logger.LogLevel.Info);
+            Logger.Log($"[Window_Loaded] StatusText.Text: \"{StatusText.Text}\"", Logger.LogLevel.Info);
+
+        }
+
+        private void InitializeTerminalSession()
+        {
+            Logger.Log("🔧 Initierar terminalsession manuellt", LogLevel.Info);
+            tcpClient = session.Client;
+            Logger.Log($"tcpClient tilldelad – Hash: {tcpClient?.GetHashCode() ?? -1}", LogLevel.Info);
+        }
+
+        private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (!terminalReady)
+            {
+                Logger.Log("Input blockerat – terminalen är inte redo", LogLevel.Warning);
+                e.Handled = true;
+            }
         }
 
         private async void Window_KeyDown(object sender, KeyEventArgs e)
         {
-            Logger.Log($"[TX] KeyDown", LogLevel.Info);// Ctrl + [A-Z] → kontrolltecken 0x01–0x1A
+            Logger.Log($"[KeyDown] MainWindow-instans: {this.GetHashCode()}", LogLevel.Info);
+            Logger.Log($"[KeyDown] StatusText-instans: {StatusText.GetHashCode()}", Logger.LogLevel.Info);
+            Logger.Log($"[KeyDown] StatusText.Text: \"{StatusText.Text}\"", Logger.LogLevel.Info);
+            idleTimer.Stop();
+            idleTimer.Start(); // 🔁 Starta om varje gång användaren skriver
+
+            Logger.Log($"KeyDown – terminalReady: {terminalReady}, tcpClient null? {tcpClient == null}", LogLevel.Debug);
+            Logger.Log($"KeyDown – IsFocused: {this.IsFocused}, Key Prressed = {e.Key}", LogLevel.Debug);
+            // Testa att skicka ett tecken direkt
+            SendTestA_Click(sender, e);
+            Logger.Log($"[Window_KeyDown] tcpClient tilldelad – Hash: {tcpClient.GetHashCode()}", LogLevel.Info);
+            Logger.Log($"tcpClient tilldelad – Hash: {tcpClient?.GetHashCode() ?? -1}", LogLevel.Info);
+
+            if (!terminalReady || tcpClient == null)
+            {
+                Logger.Log("Terminalen är inte redo – KeyDown ignoreras", Logger.LogLevel.Warning);
+                e.Handled = true;
+                return;
+            }
+            Logger.Log($"tcpClient-check passerad – null? {tcpClient == null}", Logger.LogLevel.Debug);
             if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
             {
                 if (e.Key >= Key.A && e.Key <= Key.Z)
@@ -207,27 +346,63 @@ namespace PT200Emulator.UI
                     if (result != ControlCharacterResult.NotHandled)
                     {
                         Logger.Log($"[KEY] Kontrolltecken: {result}", LogLevel.Debug);
-                        await tcpClient.SendAsync(new string(ctrlChar, 1));
+                        try
+                        {
+                            await tcpClient.SendAsync(new string(ctrlChar, 1));
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Log($"💥 SendAsync misslyckades: {ex.Message}", LogLevel.Error);
+                            tcpClient = null;
+                            terminalReady = false;
+                        }
                         e.Handled = true;
                         return;
                     }
                 }
                 else if (e.Key == Key.OemOpenBrackets) // Ctrl+[ → ESC
                 {
-                    await tcpClient.SendAsync("\x1B");
+                    try
+                    {
+                        await tcpClient.SendAsync("\x1B");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"💥 SendAsync misslyckades: {ex.Message}", LogLevel.Error);
+                        tcpClient = null;
+                        terminalReady = false;
+                    }
                     e.Handled = true;
                     return;
                 }
                 else if (e.Key == Key.D2) // Ctrl+@ → 0x00
                 {
-                    await tcpClient.SendAsync("\0");
+                    try
+                    {
+                        await tcpClient.SendAsync("\0");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"💥 SendAsync misslyckades: {ex.Message}", LogLevel.Error);
+                        tcpClient = null;
+                        terminalReady = false;
+                    }
                     e.Handled = true;
                     return;
                 }
             }
             else if (e.Key == Key.P && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
             {
-                await tcpClient.SendAsync(new string((char)0x10, 1)); // Ctrl+P = 0x10
+                try
+                {
+                    await tcpClient.SendAsync(new string((char)0x10, 1)); // Ctrl+P = 0x10
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"💥 SendAsync misslyckades: {ex.Message}", LogLevel.Error);
+                    tcpClient = null;
+                    terminalReady = false;
+                }
                 e.Handled = true;
                 return;
             }
@@ -329,10 +504,24 @@ namespace PT200Emulator.UI
                     break;
             }
 
-            if (seq != null)
+            if (seq != null && tcpClient != null)
             {
-                await tcpClient.SendAsync(seq);
+                try
+                {
+                    Logger.Log($"Försöker skicka: \"{seq}\"", LogLevel.Debug);
+                    await tcpClient.SendAsync(seq);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"💥 SendAsync misslyckades: {ex.Message}", LogLevel.Error);
+                    tcpClient = null;
+                    terminalReady = false;
+                }
                 e.Handled = true;
+            }
+            else if (tcpClient == null)
+            {
+                Logger.Log("tcpClient är null i Window_KeyDown – sekvens ignoreras", Logger.LogLevel.Warning);
             }
         }
 
@@ -353,7 +542,16 @@ namespace PT200Emulator.UI
             char ch = e.Text[0];
             Logger.Log($"[KEY] PreviewTextInput: '{ch}'", LogLevel.Debug);
 
-            await tcpClient.SendAsync(new string(ch, 1)); // Skicka till värddatorn
+            try
+            {
+                await tcpClient.SendAsync(new string(ch, 1)); // Skicka till värddatorn
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"💥 SendAsync misslyckades: {ex.Message}", LogLevel.Error);
+                tcpClient = null;
+                terminalReady = false;
+            }
             await parser.Feed(ch);                              // Visa lokalt
             e.Handled = true;
         }
@@ -361,17 +559,41 @@ namespace PT200Emulator.UI
         private async void Window_TextInput(object sender, TextCompositionEventArgs e)
         {
             string input = e.Text;
+            Logger.Log($"TextInput triggas – text: \"{e.Text}\"", LogLevel.Debug);
+            Logger.Log($"terminalReady: {terminalReady}", LogLevel.Debug);
 
             // Ignorera carriage return och backspace här – de hanteras i KeyDown
             if (input.Contains('\r') || input.Contains('\b')) return;
 
             // Skicka bara till servern – låt parsern mata när det kommer tillbaka
-            await tcpClient.SendAsync(input);
+            if (tcpClient != null)
+                try
+                {
+                    await tcpClient.SendAsync(input);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"💥 SendAsync misslyckades: {ex.Message}", LogLevel.Error);
+                    tcpClient = null;
+                    terminalReady = false;
+                }
+            else
+            {
+                Logger.Log($"Ignorerar input \"{input}\" – tcpClient är null", Logger.LogLevel.Warning);
+            }
         }
+
+        private DateTime lastUpdate = DateTime.MinValue;
 
         private void UpdateTerminalDisplay()
         {
             //Logger.Log($"[TX] UpdateTerminalDisplay", LogLevel.Info);// Ctrl + [A-Z] → kontrolltecken 0x01–0x1A
+
+            if ((DateTime.Now - lastUpdate).TotalMilliseconds < 50)
+                return;
+
+            lastUpdate = DateTime.Now;
+
             bool isPromptPosition = screenBuffer.CursorRow == 21 && screenBuffer.CursorCol == 0;
             TerminalCanvas.Height = screenBuffer.Rows * lineHeight;
             TerminalCanvas.Children.Clear();
@@ -443,7 +665,7 @@ namespace PT200Emulator.UI
 
 
 
-            if (parser.EmacsMode && parser.EmacsLayout != null)
+            if (parser != null && parser.EmacsMode && parser.EmacsLayout != null)
             {
                 Logger.Log($"[UI] EMACS-läge: {parser.EmacsMode}, Fält: {parser.EmacsLayout?.Fields.Count ?? 0}", LogLevel.Debug);
                 if (parser.EmacsLayout?.IsActive == true)
@@ -506,11 +728,13 @@ namespace PT200Emulator.UI
                 }
 
                 // Uppdatera statusrad en gång
-                StatusText.Text = $"Cursor: ({screenBuffer.CursorRow},{screenBuffer.CursorCol}) | Färg: {state.Display}";
+                StatusText.Foreground = MainWindow_StatustextColor;
+                StatusText.Text = $"Cursor: ({screenBuffer.CursorRow},{screenBuffer.CursorCol}) | Färg: {state.Display} | {MainWindow_Statustext}";
             }
+            Logger.Log($"[UpdateTerminalDisplay] StatusText-instans: {StatusText.GetHashCode()}", Logger.LogLevel.Info);
+            Logger.Log($"[UpdateTerminalDisplay] StatusText.Text: \"{StatusText.Text}\"", Logger.LogLevel.Info);
+
         }
-
-
 
         private void StartCursorBlink()
         {
@@ -573,6 +797,39 @@ namespace PT200Emulator.UI
             return Brushes.DarkGray;
         }
 
+        private void RunTerminalSanityReport()
+        {
+            Logger.Log("=== TerminalSanityReport ===", Logger.LogLevel.Info);
+
+            Logger.Log($"Session: {(session != null ? "OK" : "NULL")}", Logger.LogLevel.Info);
+            Logger.Log($"TcpClient: {(tcpClient != null ? "OK" : "NULL")}", Logger.LogLevel.Info);
+            Logger.Log($"Parser: {(parser != null ? "OK" : "NULL")}", Logger.LogLevel.Info);
+            Logger.Log($"ScreenBuffer: {(screenBuffer != null ? "OK" : "NULL")}", Logger.LogLevel.Info);
+            Logger.Log($"ControlHandler: {(controlHandler != null ? "OK" : "NULL")}", Logger.LogLevel.Info);
+
+            if (parser != null)
+            {
+                Logger.Log($"EmacsMode: {parser.EmacsMode}", Logger.LogLevel.Info);
+                Logger.Log($"EmacsLayout: {(parser.EmacsLayout != null ? "OK" : "NULL")}", Logger.LogLevel.Info);
+            }
+
+            if (session != null)
+            {
+                Logger.Log($"Session.IsConnected: {session.IsConnected}", Logger.LogLevel.Info);
+            }
+
+            Logger.Log("=== Slut på rapport ===", Logger.LogLevel.Info);
+        }
+
+        private async void SendTest_Click(object sender, RoutedEventArgs e)
+        {
+            Logger.Log("Testknapp: försöker skicka 'A'", LogLevel.Info);
+            await tcpClient.SendAsync("A");
+        }
+        private void ShowStatus_Click(object sender, RoutedEventArgs e)
+        {
+            Logger.Log($"🧪 StatusText just nu: \"{StatusText.Text}\"", Logger.LogLevel.Info);
+        }
     }
 
     public class StatusColorConverter : IValueConverter

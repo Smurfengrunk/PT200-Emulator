@@ -1,161 +1,117 @@
-﻿using System;
+﻿using PT200Emulator.IO;
+using PT200Emulator.Parser;
+using PT200Emulator.Protocol;
+using PT200Emulator.Util;
+using System;
+using System.IO;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
-using PT200Emulator.Util; // för Logger
-using PT200Emulator.Parser;
+using static PT200Emulator.Util.Logger;
 
-namespace PT200Emulator.IO
+public class TcpTerminalClient : ITerminalClient, IDisposable
 {
-    public class TcpTerminalClient : ITerminalClient
+    private TcpClient _client;
+    private NetworkStream _stream;
+    private TelnetInterpreter _telnet;
+    private EscapeSequenceParser _parser;
+
+    public async Task ConnectAsync(string host, int port)
     {
-        private readonly EscapeSequenceParser parser;
-        private TcpClient client;
-        private NetworkStream stream;
+        _client = new TcpClient();
+        await _client.ConnectAsync(host, port);
+        _stream = _client.GetStream();
+        Logger.Log($"Connected to {host}:{port}", Logger.LogLevel.Info);
+    }
 
-        public event Action DataReceived;
+    public event Action<string> DataReceived;
 
-        // Mode‑indikator
-        private bool termMode = false;
-        private Timer modeTimer;
-        private readonly TimeSpan termTimeout = TimeSpan.FromSeconds(3);
+    private void RaiseDataReceived(string text)
+    {
+        DataReceived?.Invoke(text);
+    }
 
-        public TcpTerminalClient(EscapeSequenceParser parser)
+
+    public TcpTerminalClient(TcpClient client, EscapeSequenceParser parser)
+    {
+        _client = client;
+        _stream = client.GetStream();
+        _parser = parser;
+        _telnet = new TelnetInterpreter();
+
+        _telnet.OnDataByte += async b =>
         {
-            this.parser = parser;
-        }
+            char ch = (char)b;
+            Logger.Log($"TO-PARSER: 0x{b:X2} '{ch}'", Logger.LogLevel.Debug);
+            await _parser.Feed(ch);
+            RaiseDataReceived(ch.ToString());
+        };
 
-        public async Task ConnectAsync(string host, int port)
+        _telnet.OnTelnetCommand += cmd =>
         {
-            client = new TcpClient();
-            await client.ConnectAsync(host, port);
-            stream = client.GetStream();
+            Logger.Log($"TELNET: {cmd}", Logger.LogLevel.Info);
+        };
+    }
 
-            _ = Task.Run(async () =>
+    public async Task StartAsync(CancellationToken token)
+    {
+        byte[] buffer = new byte[1024];
+        while (_stream.CanRead && !token.IsCancellationRequested)
+        {
+            int bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length, token);
+            if (bytesRead > 0)
             {
-                var buffer = new byte[4096];
-                int bytesRead;
-
-                bool inTelnetCommand = false;
-                bool inSubNegotiation = false;
-
-                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                {
-                    Logger.LogHex(buffer, bytesRead); // logga rådata
-
-                    bool escSeen = false;
-
-                    for (int i = 0; i < bytesRead; i++)
-                    {
-                        byte b = buffer[i];
-
-                        if (b == 0x1B) escSeen = true; // ESC hittad
-
-                        if (inTelnetCommand)
-                        {
-                            if (inSubNegotiation)
-                            {
-                                if (b == 0xFF)
-                                {
-                                    inTelnetCommand = true;
-                                    inSubNegotiation = false;
-                                }
-                                continue;
-                            }
-                            else
-                            {
-                                if (b == 0xFA) // SB
-                                {
-                                    Logger.Log("[TELNET] SB (Subnegotiation Begin)");
-                                    inSubNegotiation = true;
-                                    continue;
-                                }
-                                else if (b == 0xF0) // SE
-                                {
-                                    Logger.Log("[TELNET] SE (Subnegotiation End)");
-                                    inTelnetCommand = false;
-                                    continue;
-                                }
-                                else
-                                {
-                                    string cmdName = b switch
-                                    {
-                                        0xFB => "WILL",
-                                        0xFC => "WONT",
-                                        0xFD => "DO",
-                                        0xFE => "DONT",
-                                        _ => $"CMD {b:X2}"
-                                    };
-                                    byte option = buffer[i + 1];
-                                    Logger.Log($"[TELNET] {cmdName} (option {option:X2})");
-                                    i++; // hoppa över option
-                                    inTelnetCommand = false;
-                                    //continue;
-                                }
-                            }
-                        }
-
-                        if (b == 0xFF) // IAC
-                        {
-                            inTelnetCommand = true;
-                            // ta inte continue här, utan låt nästa iteration avgöra
-                        }
-                        else if (inTelnetCommand)
-                        {
-                            // hantera telnetkommandot och ev. stäng av inTelnetCommand
-                            continue;
-                        }
-
-                        // Vanlig data → mata parsern
-                        char ch = Encoding.ASCII.GetChars(new[] { b })[0];
-                        await parser.Feed(ch);
-                    }
-
-                    // Mode‑detektering med timer
-                    if (escSeen)
-                    {
-                        if (!termMode)
-                        {
-                            termMode = true;
-                            Logger.Log("[MODE] Switched to TERM mode (ESC sequences detected)");
-                        }
-                        ResetModeTimer();
-                    }
-
-                    DataReceived?.Invoke();
-                }
-            });
+                Logger.LogHex(buffer, bytesRead, "RX");
+                _telnet.Feed(buffer, bytesRead);
+            }
         }
+    }
 
-        public async Task SendAsync(string text)
-        {
-            if (stream == null) return;
-            var bytes = Encoding.UTF8.GetBytes(text);
-            Logger.LogHex(bytes, bytes.Length, "TX");
-            await stream.WriteAsync(bytes, 0, bytes.Length);
-            await stream.FlushAsync();
-        }
+    public async Task SendAsync(char ch)
+    {
+        Logger.Log("tcpClient.SendAsync startar", LogLevel.Debug);
+        Logger.Log($"SendAsync körs på instans – Hash: {this.GetHashCode()}", LogLevel.Info);
 
-        public async Task SendAsync(byte[] bytes)
-        {
-            if (stream == null || bytes == null || bytes.Length == 0) return;
-            Logger.LogHex(bytes, bytes.Length, "TX");
-            await stream.WriteAsync(bytes, 0, bytes.Length);
-            await stream.FlushAsync();
-        }
+        byte[] buffer = new byte[] { (byte)ch };
+        await _stream.WriteAsync(buffer, 0, buffer.Length);
+        Logger.Log($"TX: 0x{buffer[0]:X2} '{ch}'", Logger.LogLevel.Debug);
 
-        private void ResetModeTimer()
-        {
-            modeTimer?.Dispose();
-            modeTimer = new Timer(_ =>
-            {
-                if (termMode)
-                {
-                    termMode = false;
-                    Logger.Log("[MODE] Switched to TEXT mode (no ESC sequences for timeout period)");
-                }
-            }, null, termTimeout, Timeout.InfiniteTimeSpan);
-        }
+        Logger.Log("tcpClient.SendAsync avslutas", LogLevel.Debug);
+
+    }
+
+    public async Task SendAsync(string text)
+    {
+        Logger.Log("tcpClient.SendAsync startar", LogLevel.Debug);
+        Logger.Log($"SendAsync körs på instans – Hash: {this.GetHashCode()}", LogLevel.Info);
+
+        byte[] buffer = Encoding.ASCII.GetBytes(text);
+        await _stream.WriteAsync(buffer, 0, buffer.Length);
+        Logger.Log($"TX: {BitConverter.ToString(buffer)} \"{text}\"", Logger.LogLevel.Debug);
+
+        Logger.Log("tcpClient.SendAsync avslutas", LogLevel.Debug);
+
+    }
+
+    public async Task SendAsync(byte[] buffer)
+    {
+        Logger.Log("tcpClient.SendAsync startar", LogLevel.Debug);
+        Logger.Log($"SendAsync körs på instans – Hash: {this.GetHashCode()}", LogLevel.Info);
+
+        if (buffer == null || buffer.Length == 0)
+            return;
+
+        await _stream.WriteAsync(buffer, 0, buffer.Length);
+        Logger.Log($"TX: {BitConverter.ToString(buffer)}", Logger.LogLevel.Debug);
+
+        Logger.Log("tcpClient.SendAsync avslutas", LogLevel.Debug);
+
+    }
+
+    public void Dispose()
+    {
+        _stream?.Close();
+        _client?.Close();
+        Logger.Log("TcpTerminalClient har stängts", Logger.LogLevel.Info);
     }
 }

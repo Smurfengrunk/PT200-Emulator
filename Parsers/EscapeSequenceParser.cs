@@ -23,13 +23,11 @@ namespace PT200Emulator.Parser
         private readonly Dictionary<byte, char> g1Map;
         private bool usingG1 = false;
         private bool emacsMode = false;
-        private bool emacsDetectionEnabled = false;
         internal bool EmacsMode => emacsMode;
         private EmacsLayoutModel emacsLayout;
         internal EmacsLayoutModel EmacsLayout => emacsLayout;
         internal event Action EmacsLayoutUpdated;
 
-        private readonly ITerminalClient tcpClient;
         private readonly IScreenBuffer screenBuffer;
 
         public event Func<byte[], Task> OutgoingDcs;
@@ -41,10 +39,12 @@ namespace PT200Emulator.Parser
         private readonly ControlCharacterHandler controlHandler;
         private readonly ParserErrorHandler errorHandler = new();
         private readonly EmacsDetector emacsDetector = new();
+        private ITerminalClient _client;
+        private readonly IScreenBuffer _buffer;
 
-        public EscapeSequenceParser(ITerminalClient client, IScreenBuffer buffer)
+        public EscapeSequenceParser(IScreenBuffer buffer)
         {
-            tcpClient = client;
+            _buffer = buffer;
             screenBuffer = buffer;
             g1Map = InitG1Map();
 
@@ -54,7 +54,14 @@ namespace PT200Emulator.Parser
             controlHandler = new ControlCharacterHandler();
             controlHandler.BreakReceived += HandleBreak;
             controlHandler.RawOutput += bytes => OutgoingRaw?.Invoke(bytes);
+
+
         }
+        public void SetClient(ITerminalClient client)
+        {
+            _client = client;
+        }
+
 
         private static bool IsControlCharacter(char ch)
         {
@@ -165,7 +172,7 @@ namespace PT200Emulator.Parser
             if (emacsDetector.IsReady && !emacsMode)
             {
                 emacsMode = true;
-                tcpClient.SendAsync("\x11"); // XON
+                _client.SendAsync("\x11"); // XON
                 Logger.Log("[MODE] EMACS mode ON");
                 Logger.Log("[CTRL-OUT] XON (0x11) skickad vid EMACS-start");
             }
@@ -223,11 +230,11 @@ namespace PT200Emulator.Parser
                 string response = GenerateDcsResponse();
                 try
                 {
-                    await tcpClient.SendAsync(response);
+                    await _client.SendAsync(response);
                 }
                 catch (Exception ex)
                 {
-                    errorHandler.Handle(ex, "tcpClient.SendAsync i HandleDCS");
+                    errorHandler.Handle(ex, "_client.SendAsync i HandleDCS");
                 }
                 try
                 {
@@ -327,7 +334,6 @@ namespace PT200Emulator.Parser
                 // 🟢 Här sätter du flaggan
                 if (command == 'J' && parameters == "2")
                 {
-                    emacsDetectionEnabled = true;
                     Logger.Log("Emacs-detektering aktiverad efter ESC[2J", LogLevel.Debug);
                 }
             }
@@ -379,8 +385,7 @@ namespace PT200Emulator.Parser
             {
                 emacsMode = true;
                 Log("[MODE] EMACS mode ON");
-                tcpClient.SendAsync("\x11"); // XON
-                emacsDetectionEnabled = true;
+                _client.SendAsync("\x11"); // XON
                 Log("[CTRL-OUT] XON (0x11) skickad vid EMACS-start");
             }
         }

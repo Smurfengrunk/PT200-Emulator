@@ -1,5 +1,6 @@
 ﻿using PT200Emulator.Util;
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Collections.Generic;
 using static PT200Emulator.Util.Logger;
 
@@ -41,6 +42,14 @@ namespace PT200Emulator.Protocol
                 (char)0x0D => ControlCharacterResult.CarriageReturn, // CR
                 _ => ControlCharacterResult.NotHandled
             };
+        }
+
+        // För att undvika varningar om oanvända händelser
+        private void TouchEvents()
+        {
+            _ = RawOutput;
+            _ = BreakReceived;
+            _ = BellReceived;
         }
     }
 }

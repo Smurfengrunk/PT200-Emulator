@@ -8,6 +8,8 @@ namespace PT200Emulator.IO
 {
     public interface ITerminalClient
     {
-        Task SendAsync(string data);
+        Task SendAsync(byte[] buffer);
+        Task SendAsync(char ch);
+        Task SendAsync(string text);
     }
 }
