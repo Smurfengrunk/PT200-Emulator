@@ -10,6 +10,7 @@ namespace PT200Emulator.Util
         private static readonly object _lock = new();
         private static readonly string logFilePath;
         private static readonly HashSet<string> _logOnceKeys = new();
+        public static bool SilentMode = false;
 
         public enum LogLevel
         {
@@ -18,6 +19,14 @@ namespace PT200Emulator.Util
             Info,
             Warning,
             Error
+        }
+
+        public enum LogProfile
+        {
+            Silent,
+            Normal,
+            Debug,
+            Trace
         }
 
         public static LogLevel CurrentLevel = LogLevel.Warning;
@@ -36,13 +45,21 @@ namespace PT200Emulator.Util
 
         public static void Log(string message, LogLevel level = LogLevel.Info)
         {
-            if (!IsEnabled(level)) return;
+            if (SilentMode || !IsEnabled(level)) return;
+
+            if (level == LogLevel.Info && message.StartsWith("🛠️"))
+            {
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine(message);
+                Console.ResetColor();
+            }
 
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] {message}";
 
             lock (_lock)
             {
-                File.AppendAllText(logFilePath, line + Environment.NewLine, Encoding.UTF8);
+                using var writer = new StreamWriter(logFilePath, append: true, Encoding.UTF8);
+                writer.WriteLine(line);
             }
 
             if (Environment.UserInteractive && !Console.IsOutputRedirected)
@@ -78,6 +95,7 @@ namespace PT200Emulator.Util
 
         public static void LogHex(byte[] data, int length, string direction = "RX")
         {
+            if (length > 512 && CurrentLevel < LogLevel.Trace) return;
             var hex = BitConverter.ToString(data, 0, length);
             var ascii = new StringBuilder(length);
 
@@ -104,6 +122,31 @@ namespace PT200Emulator.Util
                 }
                 Log($"{row:D2}: {line}", LogLevel.Debug);
             }
+        }
+
+        public static void SetProfile(LogProfile profile)
+        {
+            switch (profile)
+            {
+                case LogProfile.Silent:
+                    SilentMode = true;
+                    CurrentLevel = LogLevel.Error;
+                    break;
+                case LogProfile.Normal:
+                    SilentMode = false;
+                    CurrentLevel = LogLevel.Warning;
+                    break;
+                case LogProfile.Debug:
+                    SilentMode = false;
+                    CurrentLevel = LogLevel.Debug;
+                    break;
+                case LogProfile.Trace:
+                    SilentMode = false;
+                    CurrentLevel = LogLevel.Trace;
+                    break;
+            }
+
+            Log($"🛠️ Loggprofil satt till {profile}", LogLevel.Info);
         }
     }
 }

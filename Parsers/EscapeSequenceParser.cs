@@ -1,14 +1,14 @@
 ﻿using PT200Emulator.Core;
 using PT200Emulator.IO;
 using PT200Emulator.Models;
-using PT200Emulator.Protocol;
 using PT200Emulator.Util;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
-using static PT200Emulator.Protocol.ControlCharacterHandler;
+using System.Windows.Media;
 using static PT200Emulator.Util.Logger;
+using static ScreenBuffer;
 
 namespace PT200Emulator.Parser
 {
@@ -32,6 +32,7 @@ namespace PT200Emulator.Parser
 
         public event Func<byte[], Task> OutgoingDcs;
         public event Func<byte[], Task> OutgoingRaw;
+        public event Action BufferUpdated;
 
         private readonly Dictionary<string, Action<byte[]>> dcsCommands = new();
         private readonly CsiCommandSet csiCommandSet;
@@ -41,6 +42,7 @@ namespace PT200Emulator.Parser
         private readonly EmacsDetector emacsDetector = new();
         private ITerminalClient _client;
         private readonly IScreenBuffer _buffer;
+        private readonly TextAttributeState currentAttributes = new();
 
         public EscapeSequenceParser(IScreenBuffer buffer)
         {
@@ -70,36 +72,38 @@ namespace PT200Emulator.Parser
 
         public async Task Feed(char ch)
         {
-            Logger.Log($"[FEED] RX byte 0x{(int)ch:X2} → '{(char.IsControl(ch) ? "." : ch)}' | State={state}", LogLevel.Debug); if (IsControlCharacter(ch))
+            //Logger.Log($"[FEED] RX byte 0x{(int)ch:X2} → '{(char.IsControl(ch) ? "." : ch)}' | State={state}", LogLevel.Debug); if (IsControlCharacter(ch))
+            Logger.Log($"[FEED] '{ch}' (int: {(int)ch}) | IsControl: {IsControlCharacter(ch)} | State: {state}", LogLevel.Debug);
+            if (EnableParserDebug)
+                Logger.Log($"[CTRL-IN] 0x{(int)ch:X2}");
+
+            var result = controlHandler.Handle(ch);
+            if (IsControlCharacter(ch))
             {
-                if (EnableParserDebug)
-                    Logger.Log($"[CTRL-IN] 0x{(int)ch:X2}");
+                var cresult = controlHandler.Handle(ch);
 
-                var result = controlHandler.Handle(ch);
-                if (IsControlCharacter(ch))
+                switch (cresult)
                 {
-                    if (EnableParserDebug)
-                        Logger.Log($"[CTRL-IN] 0x{(int)ch:X2}", LogLevel.Debug);
-
-                    // Hanterade kontrolltecken
-                    // Hantera specialfall
-                    if (result is ControlCharacterResult.LineFeed or ControlCharacterResult.CarriageReturn)
-                    {
-                        HandleNormal(ch); // eller en särskild metod för radslut
-                    }
-                    else if (result is ControlCharacterResult.Bell or ControlCharacterResult.Abort)
-                    {
+                    case ControlCharacterHandler.ControlCharacterResult.LineFeed:
+                    case ControlCharacterHandler.ControlCharacterResult.CarriageReturn:
+                        HandleNormal(ch);
+                        break;
+                    case ControlCharacterHandler.ControlCharacterResult.Bell:
+                    case ControlCharacterHandler.ControlCharacterResult.Abort:
                         OutgoingRaw?.Invoke(controlHandler.LastRawBytes);
-                    }
-                    return;
-
+                        break;
+                    case ControlCharacterHandler.ControlCharacterResult.NotHandled:
+                    case ControlCharacterHandler.ControlCharacterResult.Null:
+                    case ControlCharacterHandler.ControlCharacterResult.FormFeed:
+                        Logger.Log($"[Feed] Tecken ignorerat: '{ch}' i state {state}", LogLevel.Trace); break;
+                    default:
+                        // Okänt kontrolltecken
+                        Logger.Log($"[CTRL-IN] Okänt kontrolltecken: 0x{(int)ch:X2}", LogLevel.Warning);
+                        OutgoingRaw?.Invoke(controlHandler.LastRawBytes);
+                        break;
                 }
-
-                // Okänt kontrolltecken
-                Logger.Log($"[CTRL-IN] Okänt kontrolltecken: 0x{(int)ch:X2}", LogLevel.Warning);
-                    OutgoingRaw?.Invoke(controlHandler.LastRawBytes);
-                    return;
-                }
+                return;
+            }
 
             if (EnableParserDebug)
             {
@@ -115,10 +119,12 @@ namespace PT200Emulator.Parser
                 case ParseState.Escape:
                     Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
                     HandleEscape(ch);
+                    state = ParseState.Normal;
                     break;
                 case ParseState.CSI:
                     Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
                     HandleCSI(ch);
+                    state = ParseState.Normal;
                     break;
                 case ParseState.DCS:
                     Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
@@ -132,10 +138,12 @@ namespace PT200Emulator.Parser
                         state = ParseState.Normal;
                         seqBuffer.Clear();
                     }
+                    state = ParseState.Normal;
                     break;
                 case ParseState.Esc0:
                     Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
                     HandleEsc0(ch);
+                    state = ParseState.Normal;
                     break;
             }
         }
@@ -156,14 +164,14 @@ namespace PT200Emulator.Parser
             if (ch == '\x0E') // SO
             {
                 usingG1 = true;
-                Log("[SO] G1 charset aktiv");
+                Logger.Log("[SO] G1 charset aktiv");
                 return;
             }
 
             if (ch == '\x0F') // SI
             {
                 usingG1 = false;
-                Log("[SI] G0 charset aktiv");
+                Logger.Log("[SI] G0 charset aktiv");
                 return;
             }
 
@@ -177,7 +185,23 @@ namespace PT200Emulator.Parser
                 Logger.Log("[CTRL-OUT] XON (0x11) skickad vid EMACS-start");
             }
             char mapped = usingG1 ? MapFromG1(ch) : ch;
-            screenBuffer.WriteChar(mapped);
+            Logger.Log($"[NORMAL] Mapped '{ch}' → '{mapped}'", LogLevel.Debug);
+            if (screenBuffer == null)
+            {
+                Logger.Log("❌ screenBuffer är null i HandleNormal!", LogLevel.Error);
+                return;
+            }
+            try
+            {
+                screenBuffer.WriteChar(mapped);
+                Logger.Log($"✅ Tecken '{mapped}' matades in i buffer", LogLevel.Trace);
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"💥 WriteChar kastade undantag: {ex.Message}", LogLevel.Error);
+            }
+            Logger.Log($"✅ Tecken '{mapped}' matades in i buffer", LogLevel.Trace);
+            BufferUpdated?.Invoke();
         }
 
         private void HandleEscape(char ch)
@@ -320,9 +344,11 @@ namespace PT200Emulator.Parser
 
         private void HandleCsiSequence(string seq)
         {
-            char command = seq[^1]; // sista tecknet
-            if (seq.Length == 1) Logger.Log($"[CSI] Endast kommandotecken: {command}", LogLevel.Debug);
             if (string.IsNullOrEmpty(seq)) return;
+
+            char command = seq[^1]; // sista tecknet
+            if (seq.Length == 1)
+                Logger.Log($"[CSI] Endast kommandotecken: {command}", LogLevel.Debug);
 
             string parameters = seq.Substring(0, seq.Length - 1);
 
@@ -331,15 +357,42 @@ namespace PT200Emulator.Parser
                 Log($"[CSI] {command} ← {parameters}");
                 handler.Invoke(parameters);
 
-                // 🟢 Här sätter du flaggan
                 if (command == 'J' && parameters == "2")
                 {
                     Logger.Log("Emacs-detektering aktiverad efter ESC[2J", LogLevel.Debug);
                 }
+
+                if (command == 'm') // SGR – Set Graphics Rendition
+                {
+                    var codes = parameters.Split(';');
+                    foreach (var codeStr in codes)
+                    {
+                        if (int.TryParse(codeStr, out int code))
+                        {
+                            switch (code)
+                            {
+                                case 0:
+                                    screenBuffer.CurrentStyle.Reset();
+                                    break;
+                                case 5:
+                                    screenBuffer.CurrentStyle.Blink = true;
+                                    break;
+                                default:
+                                    if (code >= 30 && code <= 37)
+                                        screenBuffer.CurrentStyle.Foreground = ColorThemeManager.GetForeground(code);
+                                    else if (code >= 40 && code <= 47)
+                                        screenBuffer.CurrentStyle.Background = ColorThemeManager.GetBackground(code);
+                                    break;
+                            }
+                        }
+                    }
+
+                    Logger.Log($"🎨 Färgsekvens tolkad: ESC[{parameters}m", LogLevel.Debug);
+                }
             }
             else
             {
-                errorHandler.Handle($"[CSI] Okänt kommando: ESC[{seq} (0x{(int)command:X2})");
+                errorHandler.Handle($"[CSI] Okänt kommando: ESC[{seq} (0x{(int)command:X2}) med parameter '{parameters}'");
             }
         }
 

@@ -100,6 +100,11 @@ public class TerminalSessionManager
         return $"Connected: {IsConnected}, Parser: {(Parser != null ? "OK" : "NULL")}, Client: {(Client != null ? "OK" : "NULL")}";
     }
 
+    public async Task SendBytes(byte[] data)
+    {
+        await Client.SendAsync(data); // eller vad din klientmetod heter
+    }
+
     public ITerminalClient Client
     {
         get

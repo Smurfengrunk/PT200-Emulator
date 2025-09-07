@@ -11,9 +11,13 @@ namespace PT200Emulator.Core
     {
         int Rows { get; }
         int Cols { get; }
+        public TextAttributeState CurrentStyle { get; set; }
+
         void WriteChar(char ch);
-        void WriteChar(int row, int col, char ch, bool blink = false);
+        //void WriteChar(int row, int col, char ch, bool blink = false);
+        void WriteChar(char ch, TextAttributeState style);
         void WriteChar(int row, int col, char ch);
+        void WriteString(string str, TextAttributeState style);
         void SetCursorPosition(int row, int col);
         void Clear();
         void ClearLine();

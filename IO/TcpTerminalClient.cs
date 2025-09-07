@@ -53,6 +53,7 @@ public class TcpTerminalClient : ITerminalClient, IDisposable
         {
             Logger.Log($"TELNET: {cmd}", Logger.LogLevel.Info);
         };
+        _telnet.OnDataByte += async b => await parser.Feed((char)b);
     }
 
     public async Task StartAsync(CancellationToken token)

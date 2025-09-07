@@ -18,14 +18,14 @@ namespace PT200Emulator.Protocol
         public void Feed(byte[] buffer, int length)
         {
             Logger.LogHex(buffer, length, "FEED");
-            Logger.Log($"FEED ASCII: \"{Encoding.ASCII.GetString(buffer, 0, length)}\"");
+            Logger.Log($"[Telnet Interpreter] FEED ASCII: \"{Encoding.ASCII.GetString(buffer, 0, length)}\"");
             OnTelnetCommand += cmd => Logger.Log($"TELNET CMD: {cmd}", Logger.LogLevel.Info);
-            OnDataByte += b => Logger.Log($"CHAR: {(char)b} (0x{b:X2})", Logger.LogLevel.Info);
+            //OnDataByte += b => Logger.Log($"[TelnetInterpreter] CHAR: {(char)b} (0x{b:X2})", Logger.LogLevel.Info);
             int i = 0;
             while (i < length)
             {
                 byte b = buffer[i];
-                Logger.Log($"[TELNET FEED] Byte: 0x{b:X2} '{(char)b}'");
+                //Logger.Log($"[TELNET FEED] Byte: 0x{b:X2} '{(char)b}'");
 
                 if (b == 0xFF) // IAC
                 {

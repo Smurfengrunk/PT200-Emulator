@@ -29,7 +29,7 @@ namespace PT200Emulator.Protocol
             {
                 char ch = (char)b;
                 _renderChar(ch);
-                _log($"📥 CHAR: '{ch}' (0x{b:X2})");
+                //_log($"📥 [TelnetSessionBridge] CHAR: '{ch}' (0x{b:X2})");
             };
 
             _interpreter.OnSendBytes += bytes =>

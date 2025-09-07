@@ -22,6 +22,9 @@ namespace PT200Emulator.Core
             FullColor
         }
 
+        internal bool cursorVisible = true;
+
+
         // =========================
         // Grupp 1 – Terminalstatus
         // =========================

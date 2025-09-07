@@ -5,6 +5,7 @@
         Title="PT200 Emulator" Height="600" Width="800"
         TextInput="Window_TextInput"
         Background="Black"
+        PreviewKeyDown="Window_PreviewKeyDown"
         KeyDown="Window_KeyDown"
         PreviewTextInput="Window_TextInput"
         Focusable="True"
@@ -24,23 +25,21 @@
                 <Button x:Name="GreenDisplay" Content="Grön" Click="SetGreenDisplay" Margin="0,5,0,5" Focusable="False"/>
                 <Button x:Name="AmberDisplay" Content="Amber" Click="SetAmberDisplay" Margin="0,5,0,5" Focusable="False"/>
                 <Button x:Name="ColorDisplay" Content="Färg" Click="SetFullColorDisplay" Margin="0,5,0,5" Focusable="False"/>
-                <Button x:Name="SendTestA" Content="Skicka test-A" Click="SendTestA_Click" Margin="0,5,0,5" Focusable="False" />
-                <Button Content="Visa statustext" Click="ShowStatus_Click" Margin="0,5,0,5" Focusable="False" />
-                <Button Content="Spara historik" Click="SaveStatusHistory_Click" Margin="0,5,0,5" Focusable="False"/>
                 <Button Content="Toggle Console" Click="ToggleConsole_Click" Margin="0,5,0,20" Focusable="False"/>
-
-                <TextBlock Text="Statushistorik:" FontWeight="Bold" Margin="0,5,0,4"/>
-                <ListBox x:Name="StatusHistoryBox"
-                    FontFamily="Consolas"
-                    FontSize="11"
-                    Foreground="Black"
-                    Background="LightGray"
-                    BorderBrush="Gray"
-                    BorderThickness="1"
-                    Height="120"
-                    SelectionMode="Single"
-                    ScrollViewer.VerticalScrollBarVisibility="Auto">
-                </ListBox>
+                <ComboBox   x:Name="LogProfileComboBox"
+                            Width="150"
+                            Margin="10"
+                            SelectionChanged="OnLogProfileChanged">
+                            <ComboBoxItem Content="Silent" />
+                            <ComboBoxItem Content="Normal" />
+                            <ComboBoxItem Content="Debug" />
+                            <ComboBoxItem Content="Trace" />
+                </ComboBox>
+                <TextBlock  x:Name="ActiveProfileLabel"
+                            Text="Aktiv loggprofil: (ej vald)"
+                            FontWeight="Bold"
+                            Foreground="DarkGreen"
+                            Margin="10" />
             </StackPanel>
         </Border>
         <Grid>

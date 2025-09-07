@@ -2,6 +2,7 @@
 using PT200Emulator.UI;
 using PT200Emulator.Util;
 using System.Text;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using static PT200Emulator.Util.Logger;
@@ -14,6 +15,8 @@ public class ScreenBuffer : IScreenBuffer
         public Brush Foreground { get; set; } = Brushes.White;
         public Brush Background { get; set; } = Brushes.Black;
         public bool Blink { get; set; } = false;
+        public ConsoleColor ForegroundColor { get; set; } = ConsoleColor.White;
+        public ConsoleColor BackgroundColor { get; set; } = ConsoleColor.Black;
     }
 
     private readonly int rows;
@@ -23,6 +26,7 @@ public class ScreenBuffer : IScreenBuffer
 
     public int CursorRow { get; set; }
     public int CursorCol { get; set; }
+    public TextAttributeState CurrentStyle { get; set; } = new();
 
     // Aktuella attribut
     private bool reverseVideo = false;
@@ -33,6 +37,30 @@ public class ScreenBuffer : IScreenBuffer
     public int Cols => cols;
 
     private readonly StringBuilder _buffer = new();
+
+    internal Brush GetBrushForColor(ConsoleColor color)
+    {
+        return color switch
+        {
+            ConsoleColor.Black => Brushes.Black,
+            ConsoleColor.DarkBlue => Brushes.DarkBlue,
+            ConsoleColor.DarkGreen => Brushes.DarkGreen,
+            ConsoleColor.DarkCyan => Brushes.DarkCyan,
+            ConsoleColor.DarkRed => Brushes.DarkRed,
+            ConsoleColor.DarkMagenta => Brushes.DarkMagenta,
+            ConsoleColor.DarkYellow => Brushes.Olive,
+            ConsoleColor.Gray => Brushes.Gray,
+            ConsoleColor.DarkGray => Brushes.DarkGray,
+            ConsoleColor.Blue => Brushes.Blue,
+            ConsoleColor.Green => Brushes.Green,
+            ConsoleColor.Cyan => Brushes.Cyan,
+            ConsoleColor.Red => Brushes.Red,
+            ConsoleColor.Magenta => Brushes.Magenta,
+            ConsoleColor.Yellow => Brushes.Yellow,
+            ConsoleColor.White => Brushes.White,
+            _ => Brushes.LightGray
+        };
+    }
 
     public void AddChar(char ch)
     {
@@ -60,6 +88,7 @@ public class ScreenBuffer : IScreenBuffer
         this.rows = rows;
         this.cols = cols;
         this.attr = attr;
+        buffer = new Cell[rows, cols];
         buffer = new Cell[rows, cols];
 
         // Initiera bufferten med tomma celler
@@ -97,7 +126,7 @@ public class ScreenBuffer : IScreenBuffer
     }
 
     // Skriv ett tecken på aktuell position
-    public void WriteChar(int row, int col, char ch, bool blink = false)
+    /*public void WriteChar(int row, int col, char ch, bool blink = false)
     {
         if (ch == '\r')
         {
@@ -133,7 +162,7 @@ public class ScreenBuffer : IScreenBuffer
         }
         attr.LogAttributes(CursorRow, CursorCol, ch);
         buffer[CursorRow, CursorCol] = attr.CreateCell(ch);
-    }
+    }*/
 
     public void WriteChar(int row, int col, char ch)
     {
@@ -164,23 +193,44 @@ public class ScreenBuffer : IScreenBuffer
     }
 
 
-    public void WriteChar(char ch)
+public void WriteChar(char ch)
     {
         if (ch == '\r') { CursorCol = 0; return; }
-        if (ch == '\n') { CursorRow += 1; CursorCol = 0; return; }
+        if (ch == '\n') { CursorRow++; CursorCol = 0; return; }
 
-        int maxRow = buffer.GetLength(0); // antal rader
-        int maxCol = buffer.GetLength(1); // antal kolumner
-
-        if (CursorRow < 0 || CursorRow >= maxRow || CursorCol < 0 || CursorCol >= maxCol)
-        {
-            Logger.Log($"🚫 Ogiltig indexering: row={CursorRow}, col={CursorCol} | Max=({maxRow},{maxCol})", LogLevel.Warning);
+        if ((uint)CursorRow >= (uint)Rows || (uint)CursorCol >= (uint)Cols)
             return;
-        }
-        attr.LogAttributes(CursorRow, CursorCol, ch);
-        buffer[CursorRow, CursorCol] = attr.CreateCell(ch);
-        Logger.Log($"[WRITE] '{ch}' @ ({CursorCol},{CursorRow})", LogLevel.Debug);
+
+        var cell = buffer[CursorRow, CursorCol]; // hämtar befintlig cell
+        cell.Character = ch;
+        cell.Foreground = CurrentStyle.Foreground;
+        cell.Background = CurrentStyle.Background;
+        cell.Blink = CurrentStyle.Blink;
+
         AdvanceCursor();
+    }
+
+    public void WriteChar(char ch, TextAttributeState style)
+    {
+        if (ch == '\r') { CursorCol = 0; return; }
+        if (ch == '\n') { CursorRow++; CursorCol = 0; return; }
+
+        if ((uint)CursorRow >= (uint)Rows || (uint)CursorCol >= (uint)Cols)
+            return;
+
+        var cell = buffer[CursorRow, CursorCol]; // hämtar befintlig cell
+        cell.Character = ch;
+        cell.Foreground = style.Foreground;
+        cell.Background = style.Background;
+        cell.Blink = style.Blink;
+
+        AdvanceCursor();
+    }
+
+    public void WriteString(string text, TextAttributeState style)
+    {
+        foreach (char ch in text)
+            WriteChar(ch, style);
     }
 
     private bool IsStatusRow => CursorRow == Rows - 1;
