@@ -2,6 +2,7 @@
 using PT200Emulator.IO;
 using PT200Emulator.Parser;
 using PT200Emulator.Util;
+using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -49,11 +50,11 @@ public class TerminalSessionManager
             Logger.Log($"📌 _client tilldelad – Hash: {_client?.GetHashCode() ?? -1}", Logger.LogLevel.Info); Logger.Log($"[ConnectAsync] _client satt? {_client != null}", Logger.LogLevel.Info);
             _parser.SetClient(_client);
 
-            _parser.OutgoingDcs += async bytes => await _client.SendAsync(bytes);
+            _parser.OutgoingDcs += async bytes => await ((TcpTerminalClient)client).SendAsync(bytes);
             _parser.OutgoingRaw += async bytes =>
             {
                 Logger.Log($"OutgoingRaw triggas – {bytes.Length} byte", Logger.LogLevel.Debug);
-                await _client.SendAsync(bytes);
+                await ((TcpTerminalClient)client).SendAsync(bytes);
             };
             _parser.EmacsLayoutUpdated += onLayoutUpdated;
             _client.DataReceived += onDataReceived;
@@ -73,7 +74,17 @@ public class TerminalSessionManager
     {
         Logger.Log("Startar terminalsession...", Logger.LogLevel.Info);
         _cts = new CancellationTokenSource();
-        await _client.StartAsync(_cts.Token);
+        var readTask = _client.StartAsync(_cts.Token);
+        if (await Task.WhenAny(readTask, Task.Delay(5000)) == readTask)
+        {
+            Logger.Log("✅ Klienten startade", Logger.LogLevel.Info);
+            // hantera data
+        }
+        else
+        {
+            Logger.Log("⏳ Timeout – ingen data från servern", LogLevel.Warning);
+        }
+        //await _client.StartAsync(_cts.Token);
     }
 
     public void StopSession()

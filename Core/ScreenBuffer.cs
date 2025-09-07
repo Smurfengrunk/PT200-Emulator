@@ -1,6 +1,7 @@
 ﻿using PT200Emulator.Core;
 using PT200Emulator.UI;
 using PT200Emulator.Util;
+using System.Text;
 using System.Windows.Input;
 using System.Windows.Media;
 using static PT200Emulator.Util.Logger;
@@ -30,6 +31,29 @@ public class ScreenBuffer : IScreenBuffer
 
     public int Rows => rows;
     public int Cols => cols;
+
+    private readonly StringBuilder _buffer = new();
+
+    public void AddChar(char ch)
+    {
+        _buffer.Append(ch);
+    }
+
+    public void AddChar(string ch)
+    {
+        if (!string.IsNullOrEmpty(ch))
+        {
+            foreach (char c in ch)
+            {
+                AddChar(c); // anropa den andra metoden
+            }
+        }
+    }
+
+    public string GetText()
+    {
+        return _buffer.ToString();
+    }
 
     public ScreenBuffer(int cols, int rows, AttributeTracker attr)
     {
@@ -145,7 +169,14 @@ public class ScreenBuffer : IScreenBuffer
         if (ch == '\r') { CursorCol = 0; return; }
         if (ch == '\n') { CursorRow += 1; CursorCol = 0; return; }
 
+        int maxRow = buffer.GetLength(0); // antal rader
+        int maxCol = buffer.GetLength(1); // antal kolumner
 
+        if (CursorRow < 0 || CursorRow >= maxRow || CursorCol < 0 || CursorCol >= maxCol)
+        {
+            Logger.Log($"🚫 Ogiltig indexering: row={CursorRow}, col={CursorCol} | Max=({maxRow},{maxCol})", LogLevel.Warning);
+            return;
+        }
         attr.LogAttributes(CursorRow, CursorCol, ch);
         buffer[CursorRow, CursorCol] = attr.CreateCell(ch);
         Logger.Log($"[WRITE] '{ch}' @ ({CursorCol},{CursorRow})", LogLevel.Debug);

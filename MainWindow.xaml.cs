@@ -5,10 +5,12 @@ using PT200Emulator.Parser;
 using PT200Emulator.Protocol;
 using PT200Emulator.Util;
 using System;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -21,6 +23,7 @@ using System.Windows.Threading;
 using static PT200Emulator.Core.PT200State;
 using static PT200Emulator.Protocol.ControlCharacterHandler;
 using static PT200Emulator.Util.Logger;
+using static ScreenBuffer;
 using static System.Net.Mime.MediaTypeNames;
 
 namespace PT200Emulator.UI
@@ -54,6 +57,11 @@ namespace PT200Emulator.UI
         private bool _terminalReady;
         private string MainWindow_Statustext;
         private Brush MainWindow_StatustextColor = Brushes.OrangeRed;
+        private System.Windows.Shapes.Path cursorPath = new System.Windows.Shapes.Path();
+        private DispatcherTimer threadPulseTimer;
+        private readonly InputTracer _inputTracer;
+        private readonly ObservableCollection<string> _traceLog = new();
+
         private bool terminalReady
         {
             get => _terminalReady;
@@ -67,6 +75,8 @@ namespace PT200Emulator.UI
         {
             InitializeComponent();
             ConsoleManager.Open();
+            _inputTracer = new InputTracer();
+            InputTraceList.ItemsSource = _inputTracer.TraceLog;
             attr = new AttributeTracker();
             themeManager = new ThemeManager(attr, TerminalCanvas, StatusText, ClockTextBlock);
             StartCursorBlink();
@@ -111,7 +121,7 @@ namespace PT200Emulator.UI
             };
             clockTimer.Tick += (s, e) =>
             {
-                ClockTextBlock.Text = DateTime.Now.ToString("HH:mm");
+                ClockTextBlock.Text = DateTime.Now.ToString("HH:mm ");
             };
             clockTimer.Start();
 
@@ -119,6 +129,14 @@ namespace PT200Emulator.UI
             MainWindow_Statustext = terminalReady ? "✅ Terminalen är redo" : "⏳ Terminalen laddar...";
 
             // RunParserSelfTest();
+        }
+
+        public void Trace(string msg)
+        {
+            Logger.Log(msg, Logger.LogLevel.Debug);
+            _traceLog.Add(msg);
+            if (_traceLog.Count > 100)
+                _traceLog.RemoveAt(0); // håll loggen lätt
         }
 
         private async void SendTestA_Click(object sender, RoutedEventArgs e)
@@ -157,6 +175,7 @@ namespace PT200Emulator.UI
         private void ApplyDisplayTheme(DisplayType type)
         {
             themeManager.Apply(type);
+            UpdateSourceTracker.Set("ApplyDisplayTheme");
             UpdateTerminalDisplay();
             Keyboard.Focus(this);
         }
@@ -169,6 +188,9 @@ namespace PT200Emulator.UI
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            UpdateSourceTracker.Set("Startup");
+            UpdateTerminalDisplay();
+            UpdateSourceTracker.Set("Idle");
             try
             {
                 Logger.Log("🚪 Window_Loaded startar", LogLevel.Info);
@@ -209,12 +231,17 @@ namespace PT200Emulator.UI
                 Logger.Log($"Fönstret har fokus: {this.IsFocused}", LogLevel.Info);
                 ApplyDisplayTheme(DisplayType.Green); // eller valfritt
 
+                UpdateSourceTracker.Set("Window_Loaded (new TerminalSessionManager)");
                 session = new TerminalSessionManager(
                     host,
                     port,
                     screenBuffer,
-                    text => Dispatcher.BeginInvoke(UpdateTerminalDisplay),
-                    () => Dispatcher.BeginInvoke(UpdateTerminalDisplay)
+                    ch =>
+                    {
+                        screenBuffer.AddChar(ch);
+                        UpdateTerminalDisplay();
+                    },
+                    () => UpdateTerminalDisplay()
                 );
                 Dispatcher.Invoke(() =>
                 {
@@ -227,7 +254,7 @@ namespace PT200Emulator.UI
                 bool connected = await session.ConnectAsync();
                 if (connected)
                 {
-                    await session.StartSessionAsync();
+                    await Task.Run(() => session.StartSessionAsync());
 
                     await Task.Delay(500); // Vänta 0.5 sek efter StartSessionAsync
                     terminalReady = true;
@@ -237,8 +264,10 @@ namespace PT200Emulator.UI
                     parser = session.Parser;
                     controlHandler.RawOutput += async bytes =>
                     {
+                        Logger.Log("📡 RawOutput-event kopplat", Logger.LogLevel.Info);
                         if (tcpClient != null)
                         {
+                            Logger.Log("📨 RawOutput triggat", Logger.LogLevel.Debug);
                             Logger.LogHex(bytes, bytes.Length, "RAW");
                             try
                             {
@@ -271,6 +300,7 @@ namespace PT200Emulator.UI
                     RunTerminalSanityReport();
 
                     ApplyDisplayTheme(DisplayType.Green);
+                    UpdateSourceTracker.Set("Window_Loaded (after successful connect)");
                     UpdateTerminalDisplay();
                     StatusText.Foreground = MainWindow_StatustextColor;
                     MainWindow_Statustext = "| Ansluten";
@@ -285,6 +315,8 @@ namespace PT200Emulator.UI
                 this.Focus(); // Försök ge fönstret keyboard-fokus
                 Keyboard.Focus(this); // Dubbel säkerhet
                 Logger.Log("MainWindow har fått fokus", LogLevel.Info);
+                UpdateSourceTracker.Set("Window_Loaded (try)");
+                UpdateTerminalDisplay();
             }
             catch (Exception ex)
             {
@@ -302,6 +334,10 @@ namespace PT200Emulator.UI
         {
             Logger.Log("🔧 Initierar terminalsession manuellt", LogLevel.Info);
             tcpClient = session.Client;
+            tcpClient.DataReceived += text =>
+            {
+                Dispatcher.Invoke(() => UpdateTerminalDisplay());
+            };
             Logger.Log($"tcpClient tilldelad – Hash: {tcpClient?.GetHashCode() ?? -1}", LogLevel.Info);
         }
 
@@ -316,6 +352,15 @@ namespace PT200Emulator.UI
 
         private async void Window_KeyDown(object sender, KeyEventArgs e)
         {
+            _inputTracer.TraceKeyDown(e.Key);
+
+            if (e.Key == Key.Return)
+            {
+                var crlf = new byte[] { 0x0D, 0x0A };
+                _inputTracer.TraceSend(crlf);
+                await tcpClient.SendAsync(crlf);
+            }
+
             Logger.Log($"[KeyDown] MainWindow-instans: {this.GetHashCode()}", LogLevel.Info);
             Logger.Log($"[KeyDown] StatusText-instans: {StatusText.GetHashCode()}", Logger.LogLevel.Info);
             Logger.Log($"[KeyDown] StatusText.Text: \"{StatusText.Text}\"", Logger.LogLevel.Info);
@@ -325,8 +370,7 @@ namespace PT200Emulator.UI
             Logger.Log($"KeyDown – terminalReady: {terminalReady}, tcpClient null? {tcpClient == null}", LogLevel.Debug);
             Logger.Log($"KeyDown – IsFocused: {this.IsFocused}, Key Prressed = {e.Key}", LogLevel.Debug);
             // Testa att skicka ett tecken direkt
-            SendTestA_Click(sender, e);
-            Logger.Log($"[Window_KeyDown] tcpClient tilldelad – Hash: {tcpClient.GetHashCode()}", LogLevel.Info);
+            if (tcpClient != null) Logger.Log($"[Window_KeyDown] tcpClient tilldelad – Hash: {tcpClient.GetHashCode()}", LogLevel.Info);
             Logger.Log($"tcpClient tilldelad – Hash: {tcpClient?.GetHashCode() ?? -1}", LogLevel.Info);
 
             if (!terminalReady || tcpClient == null)
@@ -558,6 +602,11 @@ namespace PT200Emulator.UI
 
         private async void Window_TextInput(object sender, TextCompositionEventArgs e)
         {
+            _inputTracer.TraceTextInput(e.Text);
+            var bytes = Encoding.ASCII.GetBytes(e.Text);
+            _inputTracer.TraceSend(bytes);
+            await tcpClient.SendAsync(bytes);
+
             string input = e.Text;
             Logger.Log($"TextInput triggas – text: \"{e.Text}\"", LogLevel.Debug);
             Logger.Log($"terminalReady: {terminalReady}", LogLevel.Debug);
@@ -597,6 +646,7 @@ namespace PT200Emulator.UI
             bool isPromptPosition = screenBuffer.CursorRow == 21 && screenBuffer.CursorCol == 0;
             TerminalCanvas.Height = screenBuffer.Rows * lineHeight;
             TerminalCanvas.Children.Clear();
+            
 
             var lines = screenBuffer.GetAllLines().ToList();
             // Säkerställ att antalet rader i lines är lika många som i screenbuffer
@@ -605,23 +655,33 @@ namespace PT200Emulator.UI
 
             var typeface = new Typeface("Consolas");
 
+            Logger.Log($"[Render] before rows", LogLevel.Trace);
             for (int r = 0; r < screenBuffer.Rows; r++)
             {
+                Logger.Log($"[Render] before columns at ({r})", LogLevel.Trace);
                 for (int c = 0; c < screenBuffer.Cols; c++)
                 {
                     var cell = screenBuffer.GetCell(r, c);
+                    if (!string.IsNullOrWhiteSpace(cell.Character.ToString()))
+                    {
+                        Logger.Log($"[Render] '{cell.Character}' at ({r},{c}) → FG={cell.Foreground}, BG={cell.Background}", LogLevel.Debug);
+                    }
+                    else
+                    {
+                        Logger.Log($"[Render] ' ' at ({r},{c}) → FG={cell.Foreground}, BG={cell.Background}", LogLevel.Trace);
+                    }
 
                     var text = new TextBlock
-                    {
-                        Text = cell.Character.ToString(),
-                        Foreground = cell.Foreground,
-                        //Foreground = Brushes.LimeGreen,
-                        //Background = Brushes.DarkBlue,
-                        FontFamily = new FontFamily("Consolas"),
-                        FontSize = fontSize,
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
+                        {
+                            Text = cell.Character.ToString(),
+                            Foreground = cell.Foreground,
+                            //Foreground = Brushes.LimeGreen,
+                            //Background = Brushes.DarkBlue,
+                            FontFamily = new FontFamily("Consolas"),
+                            FontSize = fontSize,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            VerticalAlignment = VerticalAlignment.Center
+                        };
 
                     var border = new Border
                     {
@@ -715,7 +775,7 @@ namespace PT200Emulator.UI
                     new Point(cursorX, cursorY),
                     new Point(cursorX + charWidth, cursorY));
 
-                var cursorPath = new System.Windows.Shapes.Path
+                cursorPath = new System.Windows.Shapes.Path
                 {
                     Data = cursorGeometry,
                     Stroke = DisplayTheme.GetForeground(currentDisplayType),
@@ -731,20 +791,32 @@ namespace PT200Emulator.UI
                 StatusText.Foreground = MainWindow_StatustextColor;
                 StatusText.Text = $"Cursor: ({screenBuffer.CursorRow},{screenBuffer.CursorCol}) | Färg: {state.Display} | {MainWindow_Statustext}";
             }
-            Logger.Log($"[UpdateTerminalDisplay] StatusText-instans: {StatusText.GetHashCode()}", Logger.LogLevel.Info);
-            Logger.Log($"[UpdateTerminalDisplay] StatusText.Text: \"{StatusText.Text}\"", Logger.LogLevel.Info);
+            //Logger.Log($"[UpdateTerminalDisplay] StatusText-instans: {StatusText.GetHashCode()}", Logger.LogLevel.Info);
+            //Logger.Log($"[UpdateTerminalDisplay] StatusText.Text: \"{StatusText.Text}\"", Logger.LogLevel.Info);
 
         }
 
         private void StartCursorBlink()
         {
-            cursorTimer = new DispatcherTimer();
-            cursorTimer.Interval = TimeSpan.FromMilliseconds(500);
+            /*cursorTimer = new DispatcherTimer();
+              cursorTimer.Interval = TimeSpan.FromMilliseconds(500);
+              cursorTimer.Tick += (s, e) =>
+              {
+                  cursorVisible = !cursorVisible;
+                  UpdateSourceTracker.Set("CursorTimer_Tick";
+                  UpdateTerminalDisplay();
+              };*/
+            Logger.Log("🟢 StartCursorBlink körs", Logger.LogLevel.Info);
+            cursorTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(500)
+            };
             cursorTimer.Tick += (s, e) =>
             {
                 cursorVisible = !cursorVisible;
-                UpdateTerminalDisplay();
+                cursorPath.Visibility = cursorVisible ? Visibility.Visible : Visibility.Hidden;
             };
+
             cursorTimer.Start();
         }
 
@@ -830,6 +902,18 @@ namespace PT200Emulator.UI
         {
             Logger.Log($"🧪 StatusText just nu: \"{StatusText.Text}\"", Logger.LogLevel.Info);
         }
+
+        private void StartThreadPulseMonitor()
+        {
+            threadPulseTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(60)
+            };
+            threadPulseTimer.Tick += (s, e) =>
+            {
+                Logger.Log($"🧠 ThreadPulse: UI={Dispatcher.CheckAccess()}, ClientConnected={tcpClient?.Connected ?? false}", LogLevel.Info);
+            };
+        }
     }
 
     public class StatusColorConverter : IValueConverter
@@ -850,7 +934,60 @@ namespace PT200Emulator.UI
         }
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => throw new NotImplementedException();
-
     }
 
+    public static class UpdateSourceTracker
+    {
+        public static string LastCaller;
+        public static void Set(string source)
+        {
+            LastCaller = source;
+            Logger.Log($"[Tracker] UpdateTerminalDisplay anropas av: {source}", LogLevel.Debug);
+        }
+    }
+
+    public class InputTracer
+    {
+        private const int MaxEntries = 100;
+
+        private readonly ObservableCollection<string> _traceLog = new();
+
+        public ObservableCollection<string> TraceLog => _traceLog;
+
+        public void TraceTextInput(string text)
+        {
+            foreach (char ch in text)
+            {
+                byte ascii = (byte)ch;
+                string msg = $"📝 TextInput: '{ch}' → ASCII: 0x{ascii:X2}";
+                Add(msg);
+            }
+        }
+
+        public void TraceKeyDown(Key key)
+        {
+            string msg = $"⌨️ KeyDown: {key}";
+            Add(msg);
+        }
+
+        public void TraceSend(byte[] bytes)
+        {
+            string ascii = Encoding.ASCII.GetString(bytes)
+                .Replace("\r", "\\r")
+                .Replace("\n", "\\n");
+
+            string hex = BitConverter.ToString(bytes);
+            string msg = $"📤 SEND: {hex}  ASCII: \"{ascii}\"";
+            Add(msg);
+        }
+
+        private void Add(string msg)
+        {
+            Logger.Log(msg, Logger.LogLevel.Debug);
+            _traceLog.Add(msg);
+
+            if (_traceLog.Count > MaxEntries)
+                _traceLog.RemoveAt(0);
+        }
+    }
 }

@@ -4,6 +4,7 @@ using PT200Emulator.Protocol;
 using PT200Emulator.Util;
 using System;
 using System.IO;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
@@ -11,10 +12,12 @@ using static PT200Emulator.Util.Logger;
 
 public class TcpTerminalClient : ITerminalClient, IDisposable
 {
-    private TcpClient _client;
+    internal TcpClient _client;
     private NetworkStream _stream;
     private TelnetInterpreter _telnet;
     private EscapeSequenceParser _parser;
+    private TelnetSessionBridge _telnetBridge;
+    public bool Connected => !(_client.Client.Poll(1, SelectMode.SelectRead) && _client.Client.Available == 0);
 
     public async Task ConnectAsync(string host, int port)
     {
@@ -39,13 +42,12 @@ public class TcpTerminalClient : ITerminalClient, IDisposable
         _parser = parser;
         _telnet = new TelnetInterpreter();
 
-        _telnet.OnDataByte += async b =>
-        {
-            char ch = (char)b;
-            Logger.Log($"TO-PARSER: 0x{b:X2} '{ch}'", Logger.LogLevel.Debug);
-            await _parser.Feed(ch);
-            RaiseDataReceived(ch.ToString());
-        };
+        _telnetBridge = new TelnetSessionBridge(
+            _telnet,
+            bytes => _ = SendAsync(bytes),          // skickar till servern
+            ch => RaiseDataReceived(ch.ToString()),           // renderar tecken
+            msg => Logger.Log(msg, Logger.LogLevel.Debug) // loggar händelser
+        );
 
         _telnet.OnTelnetCommand += cmd =>
         {
@@ -55,24 +57,67 @@ public class TcpTerminalClient : ITerminalClient, IDisposable
 
     public async Task StartAsync(CancellationToken token)
     {
+        int bytesRead = 0;
         byte[] buffer = new byte[1024];
-        while (_stream.CanRead && !token.IsCancellationRequested)
+        Logger.Log($"🧵 [TcpTerminalClient] Körs på tråd: {Thread.CurrentThread.ManagedThreadId}", LogLevel.Trace);
+        try
         {
-            int bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length, token);
-            if (bytesRead > 0)
+            while (_stream.CanRead && !token.IsCancellationRequested)
             {
-                Logger.LogHex(buffer, bytesRead, "RX");
-                _telnet.Feed(buffer, bytesRead);
+                Logger.Log("📥 Väntar på data från servern...", LogLevel.Debug);
+                var readTask = _stream.ReadAsync(buffer, 0, buffer.Length);
+                if (await Task.WhenAny(readTask, Task.Delay(5000)) == readTask)
+                {
+                    bytesRead = await readTask;
+                    Logger.Log($"📥 Mottog {bytesRead} byte", LogLevel.Debug);
+                    Logger.LogHex(buffer, bytesRead, "RX RAW");
+                    Logger.Log($"RX ASCII: \"{Encoding.ASCII.GetString(buffer, 0, bytesRead)}\"");
+
+                    if (bytesRead == 0)
+                    {
+                        Logger.Log("🔌 Ingen data – servern har stängt anslutningen", LogLevel.Info);
+                        break;
+                    }
+                    string asciiClean = Encoding.ASCII.GetString(buffer, 0, bytesRead)
+                        .Replace("\r", "\\r")
+                        .Replace("\n", "\\n");
+                    Logger.Log($"📥 RX ASCII: \"{asciiClean}\"", Logger.LogLevel.Debug);
+                    Logger.Log($"🧠 [Parser] Matar in {bytesRead} byte till Feed()", Logger.LogLevel.Trace);
+                    Logger.Log($"📥 RX ASCII: \"{asciiClean}\"", Logger.LogLevel.Trace);
+                    _telnet.Feed(buffer, bytesRead);
+
+                }
+                else
+                {
+                    Logger.Log("⏳ Timeout – ingen data från servern på 5 sekunder", LogLevel.Warning);
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"💥 Undantag i StartAsync: {ex.Message}", LogLevel.Error);
+        }
+
+        var asciiText = BitConverter.ToString(buffer, 0, bytesRead);
+        if (asciiText.Contains("Prime session disconnected"))
+        {
+            Logger.Log("🔚 Servern har avslutat sessionen", LogLevel.Info);
+            // Stäng klient, uppdatera UI, etc.
+        }
+        if (bytesRead > 0)
+        {
+            Logger.LogHex(buffer, bytesRead, "RX");
+            Logger.Log($"📥 [TcpTerminalClient] Mottog {bytesRead} byte från servern", Logger.LogLevel.Debug);
+            Logger.Log($"📥 RX HEX: {BitConverter.ToString(buffer, 0, bytesRead)}", Logger.LogLevel.Trace);
         }
     }
 
     public async Task SendAsync(char ch)
     {
-        Logger.Log("tcpClient.SendAsync startar", LogLevel.Debug);
-        Logger.Log($"SendAsync körs på instans – Hash: {this.GetHashCode()}", LogLevel.Info);
-
         byte[] buffer = new byte[] { (byte)ch };
+        Logger.Log("tcpClient.SendAsync startar", LogLevel.Debug);
+        Logger.LogHex(buffer, buffer.Length, "TX");
+        Logger.Log($"📤 SEND: {BitConverter.ToString(buffer, 0, buffer.Length)}");
         await _stream.WriteAsync(buffer, 0, buffer.Length);
         Logger.Log($"TX: 0x{buffer[0]:X2} '{ch}'", Logger.LogLevel.Debug);
 
@@ -87,8 +132,8 @@ public class TcpTerminalClient : ITerminalClient, IDisposable
 
         byte[] buffer = Encoding.ASCII.GetBytes(text);
         await _stream.WriteAsync(buffer, 0, buffer.Length);
-        Logger.Log($"TX: {BitConverter.ToString(buffer)} \"{text}\"", Logger.LogLevel.Debug);
-
+        Logger.LogHex(buffer, buffer.Length, "TX");
+        Logger.Log($"📤 SEND: {BitConverter.ToString(buffer, 0, buffer.Length)}");
         Logger.Log("tcpClient.SendAsync avslutas", LogLevel.Debug);
 
     }
@@ -102,8 +147,8 @@ public class TcpTerminalClient : ITerminalClient, IDisposable
             return;
 
         await _stream.WriteAsync(buffer, 0, buffer.Length);
-        Logger.Log($"TX: {BitConverter.ToString(buffer)}", Logger.LogLevel.Debug);
-
+        Logger.LogHex(buffer, buffer.Length, "TX");
+        Logger.Log($"📤 SEND: {BitConverter.ToString(buffer, 0, buffer.Length)}");
         Logger.Log("tcpClient.SendAsync avslutas", LogLevel.Debug);
 
     }

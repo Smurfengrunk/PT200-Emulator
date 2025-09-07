@@ -18,5 +18,8 @@ namespace PT200Emulator.Core
         void Clear();
         void ClearLine();
         void ResetAttributes();
+        void AddChar(char ch);
+        void AddChar(string ch);
+        string GetText();
     }
 }

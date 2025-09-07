@@ -11,5 +11,7 @@ namespace PT200Emulator.IO
         Task SendAsync(byte[] buffer);
         Task SendAsync(char ch);
         Task SendAsync(string text);
+        event Action<string> DataReceived;
+        bool Connected { get; }
     }
 }
