@@ -16,8 +16,8 @@ namespace PT200Emulator.Parser
     {
         private const bool EnableParserDebug = true;
 
-        private enum ParseState { Normal, Escape, CSI, DCS, Esc0 }
-        private ParseState state = ParseState.Normal;
+        internal enum ParseState { Normal, Escape, CSI, DCS, Esc0 }
+        internal ParseState state = ParseState.Normal;
 
         private readonly StringBuilder seqBuffer = new();
         private readonly Dictionary<byte, char> g1Map;
@@ -55,8 +55,11 @@ namespace PT200Emulator.Parser
             esc0CommandSet = new Esc0CommandSet(screenBuffer);
             controlHandler = new ControlCharacterHandler();
             controlHandler.BreakReceived += HandleBreak;
-            controlHandler.RawOutput += bytes => OutgoingRaw?.Invoke(bytes);
-
+            controlHandler.RawOutput += bytes =>
+            {
+                Logger.Log($"[TX:OutgoingRaw] {BitConverter.ToString(bytes)}", LogLevel.Info);
+                OutgoingRaw?.Invoke(bytes);
+            };
 
         }
         public void SetClient(ITerminalClient client)
@@ -70,12 +73,12 @@ namespace PT200Emulator.Parser
             return ch < 0x20 || ch == 0x7F;
         }
 
-        public async Task Feed(char ch)
+        public async Task Feed(char ch, bool fromUser)
         {
             //Logger.Log($"[FEED] RX byte 0x{(int)ch:X2} → '{(char.IsControl(ch) ? "." : ch)}' | State={state}", LogLevel.Debug); if (IsControlCharacter(ch))
             Logger.Log($"[FEED] '{ch}' (int: {(int)ch}) | IsControl: {IsControlCharacter(ch)} | State: {state}", LogLevel.Debug);
             if (EnableParserDebug)
-                Logger.Log($"[CTRL-IN] 0x{(int)ch:X2}");
+                Logger.Log($"[CTRL-IN] 0x{(int)ch:X2}", LogLevel.Debug);
 
             var result = controlHandler.Handle(ch);
             if (IsControlCharacter(ch))
@@ -115,6 +118,7 @@ namespace PT200Emulator.Parser
                 case ParseState.Normal:
                     Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
                     HandleNormal(ch);
+                    if (fromUser) OutgoingRaw?.Invoke(new[] { (byte)ch }); // skicka vidare
                     break;
                 case ParseState.Escape:
                     Logger.Log($"[ParserDebugger] State changed → {state}", LogLevel.Debug);
@@ -481,5 +485,11 @@ namespace PT200Emulator.Parser
             screenBuffer.SetCursorPosition(0, 0);
             Logger.Log("[BREAK] Terminalen har nollställts", LogLevel.Info);
         }
+
+        public int GetOutgoingRawHandlerCount()
+        {
+            return OutgoingRaw?.GetInvocationList().Length ?? 0;
+        }
+        public string CurrentState => state.ToString();
     }
 }

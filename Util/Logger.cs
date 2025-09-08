@@ -14,22 +14,28 @@ namespace PT200Emulator.Util
 
         public enum LogLevel
         {
-            Trace,
-            Debug,
-            Info,
-            Warning,
-            Error
+            Error = 0,
+            Warning = 1,
+            Info = 2,
+            Debug = 3,
+            Trace = 4
         }
 
         public enum LogProfile
         {
             Silent,
             Normal,
+            Info,
             Debug,
             Trace
         }
 
-        public static LogLevel CurrentLevel = LogLevel.Warning;
+        private static LogLevel CurrentLevel = LogLevel.Warning;
+        public static LogLevel CurrentLogLevel => CurrentLevel;
+        private static LogProfile _currentProfile = LogProfile.Normal;
+        public static LogProfile CurrentProfile => _currentProfile;
+
+
 
         static Logger()
         {
@@ -40,12 +46,20 @@ namespace PT200Emulator.Util
 
         public static bool IsEnabled(LogLevel level)
         {
-            return level >= CurrentLevel;
+            return level <= CurrentLevel;
         }
 
         public static void Log(string message, LogLevel level = LogLevel.Info)
         {
-            if (SilentMode || !IsEnabled(level)) return;
+            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] {message}";
+            //Console.WriteLine($"[LOG CHECK] level={level}, CurrentLevel={CurrentLevel}, IsEnabled={level >= CurrentLevel}");
+            //Console.WriteLine($"[ENUM] level={(int)level}, CurrentLevel={(int)CurrentLevel}");
+
+            if (SilentMode || !IsEnabled(level))
+            {
+                //Console.WriteLine(IsEnabled(level) ? message : $"[LOG {level} SKIPPED]");
+                return;
+            }
 
             if (level == LogLevel.Info && message.StartsWith("🛠️"))
             {
@@ -53,9 +67,7 @@ namespace PT200Emulator.Util
                 Console.WriteLine(message);
                 Console.ResetColor();
             }
-
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] {message}";
-
+            //Console.WriteLine($"[LOG] level={level}, CurrentLevel={CurrentLevel}, IsEnabled={IsEnabled(level)}");
             lock (_lock)
             {
                 using var writer = new StreamWriter(logFilePath, append: true, Encoding.UTF8);
@@ -126,26 +138,19 @@ namespace PT200Emulator.Util
 
         public static void SetProfile(LogProfile profile)
         {
-            switch (profile)
+            _currentProfile = profile;
+            //Logger.Log($"[Logger] SetProfile({profile})", LogLevel.Info);
+            SilentMode = profile == LogProfile.Silent;
+            CurrentLevel = profile switch
             {
-                case LogProfile.Silent:
-                    SilentMode = true;
-                    CurrentLevel = LogLevel.Error;
-                    break;
-                case LogProfile.Normal:
-                    SilentMode = false;
-                    CurrentLevel = LogLevel.Warning;
-                    break;
-                case LogProfile.Debug:
-                    SilentMode = false;
-                    CurrentLevel = LogLevel.Debug;
-                    break;
-                case LogProfile.Trace:
-                    SilentMode = false;
-                    CurrentLevel = LogLevel.Trace;
-                    break;
-            }
-
+                LogProfile.Silent => LogLevel.Error,
+                LogProfile.Normal => LogLevel.Warning,
+                LogProfile.Info => LogLevel.Info,
+                LogProfile.Debug => LogLevel.Debug,
+                LogProfile.Trace => LogLevel.Trace,
+                _ => LogLevel.Warning
+            };
+            //Log($"[Logger] CurrentLevel satt till {CurrentLevel}", LogLevel.Info);
             Log($"🛠️ Loggprofil satt till {profile}", LogLevel.Info);
         }
     }

@@ -53,7 +53,7 @@ public class TcpTerminalClient : ITerminalClient, IDisposable
         {
             Logger.Log($"TELNET: {cmd}", Logger.LogLevel.Info);
         };
-        _telnet.OnDataByte += async b => await parser.Feed((char)b);
+        _telnet.OnDataByte += async b => await parser.Feed((char)b, false);
     }
 
     public async Task StartAsync(CancellationToken token)
@@ -118,7 +118,7 @@ public class TcpTerminalClient : ITerminalClient, IDisposable
         byte[] buffer = new byte[] { (byte)ch };
         Logger.Log("tcpClient.SendAsync startar", LogLevel.Debug);
         Logger.LogHex(buffer, buffer.Length, "TX");
-        Logger.Log($"📤 SEND: {BitConverter.ToString(buffer, 0, buffer.Length)}");
+        Logger.Log($"📤 SEND: {BitConverter.ToString(buffer, 0, buffer.Length)}", LogLevel.Debug);
         await _stream.WriteAsync(buffer, 0, buffer.Length);
         Logger.Log($"TX: 0x{buffer[0]:X2} '{ch}'", Logger.LogLevel.Debug);
 
@@ -129,7 +129,7 @@ public class TcpTerminalClient : ITerminalClient, IDisposable
     public async Task SendAsync(string text)
     {
         Logger.Log("tcpClient.SendAsync startar", LogLevel.Debug);
-        Logger.Log($"SendAsync körs på instans – Hash: {this.GetHashCode()}", LogLevel.Info);
+        Logger.Log($"SendAsync körs på instans – Hash: {this.GetHashCode()}", LogLevel.Debug);
 
         byte[] buffer = Encoding.ASCII.GetBytes(text);
         await _stream.WriteAsync(buffer, 0, buffer.Length);
@@ -142,7 +142,7 @@ public class TcpTerminalClient : ITerminalClient, IDisposable
     public async Task SendAsync(byte[] buffer)
     {
         Logger.Log("tcpClient.SendAsync startar", LogLevel.Debug);
-        Logger.Log($"SendAsync körs på instans – Hash: {this.GetHashCode()}", LogLevel.Info);
+        Logger.Log($"SendAsync körs på instans – Hash: {this.GetHashCode()}", LogLevel.Debug);
 
         if (buffer == null || buffer.Length == 0)
             return;

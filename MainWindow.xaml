@@ -7,18 +7,14 @@
         Background="Black"
         PreviewKeyDown="Window_PreviewKeyDown"
         KeyDown="Window_KeyDown"
-        PreviewTextInput="Window_TextInput"
         Focusable="True"
         Loaded="Window_Loaded">
-    <Window.Resources>
-        <local:LogColorConverter x:Key="LogColorConverter"/>
-    </Window.Resources>
 
     <DockPanel LastChildFill="True">
 
         <!-- Färgvalspanel -->
         <Border Background="DarkGray" Padding="5">
-            <StackPanel DockPanel.Dock="Left" Width="120" Background="DarkGray">
+            <StackPanel DockPanel.Dock="Left" Width="175" Background="DarkGray">
                 <TextBlock Text="Skärmtyp:" FontWeight="Bold" Margin="0,5,0,10"/>
                 <Button x:Name="WhiteDisplay" Content="Vit" Click="SetWhiteDisplay" Margin="0,5,0,5" Focusable="False"/>
                 <Button x:Name="BlueDisplay" Content="Blå" Click="SetBlueDisplay" Margin="0,5,0,5" Focusable="False"/>
@@ -32,6 +28,7 @@
                             SelectionChanged="OnLogProfileChanged">
                             <ComboBoxItem Content="Silent" />
                             <ComboBoxItem Content="Normal" />
+                            <ComboBoxItem Content="Info" />
                             <ComboBoxItem Content="Debug" />
                             <ComboBoxItem Content="Trace" />
                 </ComboBox>
@@ -45,7 +42,6 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="*" />
-                <RowDefinition Height="200" />
                 <RowDefinition Height="30" />
             </Grid.RowDefinitions>
 
@@ -80,21 +76,6 @@
                    FontSize="12"
                    HorizontalAlignment="Right"/>
             </Grid>
-            <ListBox x:Name="InputTraceList"
-                         Grid.Row="1"
-                         FontFamily="Consolas"
-                         FontSize="12"
-                         Background="Black"
-                         Foreground="LightGray"
-                         Margin="10"
-                         MaxHeight="200"
-                         ItemsSource="{Binding TraceLog}">
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <TextBlock Text="{Binding}" Foreground="{Binding Converter={StaticResource LogColorConverter}}"/>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
         </Grid>
     </DockPanel>
 </Window>
