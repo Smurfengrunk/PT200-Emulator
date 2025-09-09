@@ -17,7 +17,6 @@ En C#-baserad emulator för PT200-terminalen, med fokus på korrekt tangentbords
 - `Models/` – Parser- och sekvensmodeller
 - `Protocol/` – Telnet-specifik hantering
 - `UI/` – WPF-gränssnitt och visningslogik
-- `Old/` – Avvecklade komponenter för referens
 
 ## 🚀 Kom igång
 
