@@ -28,10 +28,8 @@ En C#-baserad emulator för PT200-terminalen, med fokus på korrekt tangentbords
 
 ## 📦 Byggstatus
 
-Projektet är under aktiv refaktorering. Fokus just nu:
-- Flytta logik från `MainWindow` till `TerminalPipeline` och `TerminalRenderer`
-- Samla tangentbordsinmatning i `KeyboardDecoder`
-- Renodla protokollhantering
+Projektet är för tillfället på paus, då det blivit för rörigt och svåröverskådligt.
+Ny version kommer så småningom.
 
 ## 📜 Licens
 
