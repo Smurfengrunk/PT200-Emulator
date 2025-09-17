@@ -2,6 +2,7 @@
 using PT200Emulator.Infrastructure.Logging;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -13,11 +14,17 @@ namespace PT200Emulator.Core.Parser
     {
         public enum ScreenFormat
         {
+            [Description("80 x 24")]
             S80x24,
+            [Description("80 x 48")]
             S80x48,
+            [Description("132 x 27")]
             S132x27,
+            [Description("160 x 24")]
             S160x24
         }
+        public int Cols { get; private set; }
+        public int Rows { get; private set; }
 
         public enum DisplayType
         {
@@ -101,18 +108,28 @@ namespace PT200Emulator.Core.Parser
             {
                 case ScreenFormat.S80x24:
                     ScreenBuffer = new ScreenBuffer(24, 80);
+                    Cols = 80;
+                    Rows = 24;
                     break;
                 case ScreenFormat.S80x48:
                     ScreenBuffer = new ScreenBuffer(48, 80);
+                    Cols = 80;
+                    Rows = 48;
                     break;
                 case ScreenFormat.S132x27:
                     ScreenBuffer = new ScreenBuffer(27, 132);
+                    Cols = 132;
+                    Rows = 27;
                     break;
                 case ScreenFormat.S160x24:
                     ScreenBuffer = new ScreenBuffer(24, 160);
+                    Cols = 160;
+                    Rows = 24;
                     break;
                 default: // För att undvika den ständigt närvarande null-varningen
                     ScreenBuffer = new ScreenBuffer(24, 80);
+                    Cols = 80;
+                    Rows = 24;
                     break;
             }
         }
@@ -321,6 +338,18 @@ namespace PT200Emulator.Core.Parser
 
             return string.Join("~", parts);
         }
+
+        public (int Columns, int Rows) GetDimensions()
+        {
+            return screenFormat switch
+            {
+                ScreenFormat.S80x24 => (80, 24),
+                ScreenFormat.S80x48 => (80, 48),
+                ScreenFormat.S132x27 => (132, 27),
+                ScreenFormat.S160x24 => (160, 24),
+                _ => (80, 24)
+            };
+        }
     }
 
     public static class ReflectionExtensions
@@ -424,5 +453,15 @@ namespace PT200Emulator.Core.Parser
         public int Group { get; set; }
         public int ByteIndex { get; set; }
         public List<DcsBitMapping> Bits { get; set; } = new();
+    }
+
+    public static class EnumHelper
+    {
+        public static string GetDescription(Enum value)
+        {
+            var fi = value.GetType().GetField(value.ToString());
+            var attributes = (DescriptionAttribute[])fi.GetCustomAttributes(typeof(DescriptionAttribute), false);
+            return attributes.Length > 0 ? attributes[0].Description : value.ToString();
+        }
     }
 }

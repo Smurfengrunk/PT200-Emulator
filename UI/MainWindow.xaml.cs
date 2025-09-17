@@ -76,13 +76,6 @@ namespace PT200Emulator.UI
         {
 
             InitializeComponent();
-            LogHelper.OnLogCountChanged = (count, level) =>
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    LogLevelIndicator.Text = $"Loggnivå: {level}\n{count} loggar sedan ändring";
-                });
-            };
             if (loggerFactory == null) loggerFactory = LoggerFactoryProvider.Instance;
 
             _loggerFactory = loggerFactory;
@@ -113,7 +106,35 @@ namespace PT200Emulator.UI
             HostTextBox.Text = cfg.Host;
             PortTextBox.Text = cfg.Port.ToString();
             LoggerFactoryProvider.SetMinimumLevel(LogLevel.Debug);
-            LogLevelCombo.SelectionChanged += LogLevelCombo_SelectionChanged;
+            // Loggnivåer
+            LogLevelCombo.ItemsSource = Enum.GetValues(typeof(LogLevel));
+            LogLevelCombo.SelectedItem = LoggerFactoryProvider.GetMinimumLevel();
+            LogLevelCombo.SelectionChanged += (s, e) =>
+            {
+                if (LogLevelCombo.SelectedItem is LogLevel level)
+                    LoggerFactoryProvider.SetMinimumLevel(level);
+            };
+
+            // Skärmformat
+            var formats = Enum.GetValues(typeof(TerminalState.ScreenFormat))
+                              .Cast<TerminalState.ScreenFormat>()
+                              .Select(f => new { Format = f, Name = EnumHelper.GetDescription(f) })
+                              .ToList();
+
+            ScreenFormatCombo.ItemsSource = formats;
+            ScreenFormatCombo.DisplayMemberPath = "Name";
+            ScreenFormatCombo.SelectedValuePath = "Format";
+            ScreenFormatCombo.SelectedValue = state.screenFormat;
+
+            // Loggindikator
+            LogHelper.OnLogCountChanged = (count, level) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    LogLevelIndicator.Text = $"Loggnivå: {level} | {count} loggar";
+                });
+            };
+
         }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -285,6 +306,21 @@ namespace PT200Emulator.UI
             }
         }
 
+        private void ScreenFormatCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (ScreenFormatCombo.SelectedValue is TerminalState.ScreenFormat format)
+            {
+                state.screenFormat = format;
+                var (cols, rows) = state.GetDimensions();
+                state.ScreenBuffer = new ScreenBuffer(rows, cols);
+
+                MainWindowControl.Width = cols * 8 + 40;
+                MainWindowControl.Height = rows * 18 + 60;
+
+                Terminal?.InvalidateVisual();
+                Terminal?.UpdateLayout();
+            }
+        }
 
         protected override void OnClosed(EventArgs e)
         {

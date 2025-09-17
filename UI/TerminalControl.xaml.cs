@@ -35,6 +35,7 @@ namespace PT200Emulator.UI
         private bool _renderScheduled;
         private char[,] _lastChars; // för ändringsdetektering
         private TerminalSession _session;
+        private TerminalState _state;
 
         public TerminalControl()
         {
@@ -233,6 +234,7 @@ namespace PT200Emulator.UI
 
         public void RenderFromBuffer(IScreenBuffer buffer, bool fullColor = false)
         {
+            buffer = _state.ScreenBuffer;
             if (DateTime.UtcNow - _lastRender < _renderInterval)
                 return;
 
@@ -459,6 +461,15 @@ namespace PT200Emulator.UI
                 totalHeight += SystemParameters.HorizontalScrollBarHeight;
 
             TerminalText.Height = totalHeight;
+        }
+
+        public void SetTerminalState(TerminalState state)
+        {
+            _state = state;
+            var (cols, rows) = _state.GetDimensions();
+           _session.ScreenBuffer = _state.ScreenBuffer;
+
+            InvalidateVisual(); // eller Render()
         }
     }
 }

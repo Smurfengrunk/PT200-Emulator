@@ -1,56 +1,113 @@
-﻿<Window x:Class="PT200Emulator.UI.MainWindow"
-        x:Name="MainWindowControl"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:ui="clr-namespace:PT200Emulator.UI"
-        SizeToContent="WidthAndHeight"
-        Title="PT200 Emulator"
-        TextInput="Window_TextInput"
-        Background="Black"
-        PreviewKeyDown="Window_PreviewKeyDown"
-        KeyDown="Window_KeyDown"
-        Focusable="True"
-        Loaded="Window_Loaded">
+﻿<Window
+    x:Class="PT200Emulator.UI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="clr-namespace:PT200Emulator.UI"
+    x:Name="MainWindowControl"
+    Title="PT200 Emulator"
+    Background="Black"
+    Focusable="True"
+    KeyDown="Window_KeyDown"
+    Loaded="Window_Loaded"
+    PreviewKeyDown="Window_PreviewKeyDown"
+    SizeToContent="WidthAndHeight"
+    TextInput="Window_TextInput">
 
     <DockPanel LastChildFill="False">
 
-        <!-- Sidopanel med färgval och loggnivå -->
-        <Border Background="DarkGray" Padding="5" DockPanel.Dock="Left">
+        <!--  Sidopanel med färgval och loggnivå  -->
+        <Border
+            Padding="5"
+            Background="DarkGray"
+            DockPanel.Dock="Left">
             <StackPanel Width="175" Background="DarkGray">
-                <TextBlock Text="Skärmtyp:" FontWeight="Bold" Margin="0,5,0,10"/>
-                <Button Content="Vit" Click="SetWhiteDisplay" Margin="0,5,0,5" Focusable="False"/>
-                <Button Content="Blå" Click="SetBlueDisplay" Margin="0,5,0,5" Focusable="False"/>
-                <Button Content="Grön" Click="SetGreenDisplay" Margin="0,5,0,5" Focusable="False"/>
-                <Button Content="Amber" Click="SetAmberDisplay" Margin="0,5,0,5" Focusable="False"/>
-                <Button Content="Färg" Click="SetFullColorDisplay" Margin="0,5,0,20" Focusable="False"/>
-                <Button Content="Toggle Console" Click="ToggleConsole_Click" Margin="0,5,0,20" Focusable="False"/>
-                <TextBox x:Name="HostTextBox" Width="150" Margin="0,0,5,0" Text="localhost" ToolTip="IP-adress eller värdnamn" Focusable="False"/>
-                <TextBox x:Name="PortTextBox" Width="60" Margin="0,0,5,0" Text="2323" ToolTip="Portnummer" Focusable="False"/>
-                <Button x:Name="ConnectButton" Content="Connect" Click="ConnectButton_Click" Width="80" Focusable="False"/>
-                <Button x:Name="DisconnectButton" Content="Disconnect" Click="DisconnectButton_Click" Width="80" Margin="0,5,0,20" Focusable="False"/>
+                <TextBlock
+                    Margin="0,5,0,10"
+                    FontWeight="Bold"
+                    Text="Skärmtyp:" />
+                <Button
+                    Margin="0,5,0,5"
+                    Click="SetWhiteDisplay"
+                    Content="Vit"
+                    Focusable="False" />
+                <Button
+                    Margin="0,5,0,5"
+                    Click="SetBlueDisplay"
+                    Content="Blå"
+                    Focusable="False" />
+                <Button
+                    Margin="0,5,0,5"
+                    Click="SetGreenDisplay"
+                    Content="Grön"
+                    Focusable="False" />
+                <Button
+                    Margin="0,5,0,5"
+                    Click="SetAmberDisplay"
+                    Content="Amber"
+                    Focusable="False" />
+                <Button
+                    Margin="0,5,0,10"
+                    Click="SetFullColorDisplay"
+                    Content="Färg"
+                    Focusable="False" />
+                <ComboBox
+                    x:Name="ScreenFormatCombo"
+                    Margin="0,5,0,20"
+                    DisplayMemberPath="."
+                    SelectionChanged="ScreenFormatCombo_SelectionChanged" />
+                <Button
+                    Margin="0,5,0,20"
+                    Click="ToggleConsole_Click"
+                    Content="Toggle Console"
+                    Focusable="False" />
+                <TextBox
+                    x:Name="HostTextBox"
+                    Width="150"
+                    Margin="0,0,5,0"
+                    Focusable="False"
+                    Text="localhost"
+                    ToolTip="IP-adress eller värdnamn" />
+                <TextBox
+                    x:Name="PortTextBox"
+                    Width="60"
+                    Margin="0,0,5,0"
+                    Focusable="False"
+                    Text="2323"
+                    ToolTip="Portnummer" />
+                <Button
+                    x:Name="ConnectButton"
+                    Width="80"
+                    Click="ConnectButton_Click"
+                    Content="Connect"
+                    Focusable="False" />
+                <Button
+                    x:Name="DisconnectButton"
+                    Width="80"
+                    Margin="0,5,0,20"
+                    Click="DisconnectButton_Click"
+                    Content="Disconnect"
+                    Focusable="False" />
 
-                <ComboBox x:Name="LogLevelCombo" SelectedValuePath="Content"
-                          Width="150" Margin="5">
-                    <ComboBoxItem Content="Trace" />
-                    <ComboBoxItem Content="Debug"/>
-                    <ComboBoxItem Content="Information" IsSelected="True"/>
-                    <ComboBoxItem Content="Warning"/>
-                    <ComboBoxItem Content="Error"/>
-                    <ComboBoxItem Content="Critical"/>
-                    <ComboBoxItem Content="None"/>
+                <ComboBox
+                    x:Name="LogLevelCombo"
+                    Width="150"
+                    Margin="5"
+                    SelectedValuePath="Content">
+
                 </ComboBox>
-                <!-- Visuell indikator -->
-    <TextBlock x:Name="LogLevelIndicator"
-               FontWeight="Bold"
-               Foreground="Green"
-               Margin="0,5,0,0"
-               Text="Aktuell loggnivå: Trace" />
-    <TextBlock Text="{Binding CurrentLevel}" />
-    <TextBlock Text="{Binding LogCount}" />
+                <!--  Visuell indikator  -->
+                <TextBlock
+                    x:Name="LogLevelIndicator"
+                    Margin="0,5,0,0"
+                    FontWeight="Bold"
+                    Foreground="Green"
+                    Text="Aktuell loggnivå: Trace" />
+                <TextBlock Text="{Binding CurrentLevel}" />
+                <TextBlock Text="{Binding LogCount}" />
             </StackPanel>
         </Border>
 
-        <!-- Huvudyta med terminal och statusrad -->
+        <!--  Huvudyta med terminal och statusrad  -->
         <Grid HorizontalAlignment="Left">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -59,8 +116,11 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <!-- Terminalkontrollen -->
-            <ui:TerminalControl x:Name="Terminal" Grid.Row="0" VerticalAlignment="Stretch" />
+            <!--  Terminalkontrollen  -->
+            <ui:TerminalControl
+                x:Name="Terminal"
+                Grid.Row="0"
+                VerticalAlignment="Stretch" />
         </Grid>
     </DockPanel>
 </Window>
