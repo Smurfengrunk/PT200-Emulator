@@ -1,0 +1,9 @@
+﻿<Application x:Class="PT200Emulator.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:PT200Emulator"
+             StartupUri="UI/MainWindow.xaml">
+    <Application.Resources>
+         
+    </Application.Resources>
+</Application>

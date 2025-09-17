@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36414.22
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PT200-Emulator", "PT200-Emulator.csproj", "{70FF109F-B294-4DF3-B23E-D2238B07ACBE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PT200-Emulator.Tests", "..\PT200-Emulator.Tests\PT200-Emulator.Tests.csproj", "{716A4EB9-4798-48DE-BCDC-6962B136275C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{70FF109F-B294-4DF3-B23E-D2238B07ACBE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{70FF109F-B294-4DF3-B23E-D2238B07ACBE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{70FF109F-B294-4DF3-B23E-D2238B07ACBE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{70FF109F-B294-4DF3-B23E-D2238B07ACBE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{716A4EB9-4798-48DE-BCDC-6962B136275C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{716A4EB9-4798-48DE-BCDC-6962B136275C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{716A4EB9-4798-48DE-BCDC-6962B136275C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{716A4EB9-4798-48DE-BCDC-6962B136275C}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {E5110423-1472-42BF-8824-1F80138DAF03}
+	EndGlobalSection
+EndGlobal

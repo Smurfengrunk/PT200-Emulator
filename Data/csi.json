@@ -1,0 +1,64 @@
+{
+  "CSI": [
+    {
+      "Command": "A",
+      "Name": "Cursor Up",
+      "Params": "n",
+      "Description": "Moves the cursor up by n rows"
+    },
+    {
+      "Command": "B",
+      "Name": "Cursor Down",
+      "Params": "n",
+      "Description": "Moves the cursor down by n rows"
+    },
+    {
+      "Command": "C",
+      "Name": "Cursor Forward",
+      "Params": "n",
+      "Description": "Moves the cursor forward by n columns"
+    },
+    {
+      "Command": "D",
+      "Name": "Cursor Backward",
+      "Params": "n",
+      "Description": "Moves the cursor backward by n columns"
+    },
+    {
+      "Command": "H",
+      "Name": "Cursor Position",
+      "Params": "row;column",
+      "Description": "Moves the cursor to the specified position"
+    },
+    {
+      "Command": "J",
+      "Name": "Erase in Display",
+      "Params": "n",
+      "Description": "Clears part of the screen based on n"
+    },
+    {
+      "Command": "K",
+      "Name": "Erase in Line",
+      "Params": "n",
+      "Description": "Clears part of the current line based on n"
+    },
+    {
+      "Command": "m",
+      "Name": "Select Graphic Rendition",
+      "Params": "n1;n2;...",
+      "Description": "Sets text attributes like bold, underline, colors"
+    },
+    {
+      "Command": "s",
+      "Name": "Save Cursor Position",
+      "Params": "",
+      "Description": "Saves the current cursor position"
+    },
+    {
+      "Command": "u",
+      "Name": "Restore Cursor Position",
+      "Params": "",
+      "Description": "Restores the cursor to the last saved position"
+    }
+  ]
+}

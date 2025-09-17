@@ -1,0 +1,282 @@
+{
+  "DCSBitGroups": [
+    {
+      "Group": 1,
+      "ByteIndex": 0,
+      "Bits": [
+        {
+          "Bit": 0,
+          "Property": "IsOnline",
+          "Description": "Terminalen \u00E4r online"
+        },
+        {
+          "Bit": 1,
+          "Property": "IsBlockMode",
+          "Description": "Blockl\u00E4ge aktivt"
+        },
+        {
+          "Bit": 2,
+          "Property": "IsLineMode",
+          "Description": "Radl\u00E4ge aktivt"
+        },
+        {
+          "Bit": 3,
+          "Property": "IsSoftScroll",
+          "Description": "Mjuk scrollning aktiv"
+        },
+        {
+          "Bit": 4,
+          "Property": "screenFormat",
+          "Description": "Sk\u00E4rmformat bit 0"
+        },
+        {
+          "Bit": 5,
+          "Property": "screenFormat",
+          "Description": "Sk\u00E4rmformat bit 1"
+        },
+        {
+          "Bit": 6,
+          "Property": "screenFormat",
+          "Description": "Sk\u00E4rmformat bit 2"
+        },
+        {
+          "Bit": 7,
+          "Property": "screenFormat",
+          "Description": "Sk\u00E4rmformat bit 3"
+        }
+      ]
+    },
+    {
+      "Group": 1,
+      "ByteIndex": 1,
+      "Bits": []
+    },
+    {
+      "Group": 2,
+      "ByteIndex": 2,
+      "Bits": [
+        {
+          "Bit": 0,
+          "Property": "KeyboardRepeatRate",
+          "Description": "Tangentupprepning bit 0"
+        },
+        {
+          "Bit": 1,
+          "Property": "KeyboardRepeatRate",
+          "Description": "Tangentupprepning bit 1"
+        },
+        {
+          "Bit": 2,
+          "Property": "KeyboardRepeatRate",
+          "Description": "Tangentupprepning bit 2"
+        },
+        {
+          "Bit": 3,
+          "Property": "KeyboardClick",
+          "Description": "Tangentklick aktivt"
+        },
+        {
+          "Bit": 4,
+          "Property": "ReverseVideo",
+          "Description": "Omv\u00E4nd videol\u00E4ge"
+        },
+        {
+          "Bit": 5,
+          "Property": "ControlRepresentation",
+          "Description": "Kontrolltecken visas grafiskt"
+        },
+        {
+          "Bit": 6,
+          "Property": "DscMode",
+          "Description": "DSC-l\u00E4ge aktivt"
+        },
+        {
+          "Bit": 7,
+          "Property": "SoftLock",
+          "Description": "Soft lock aktivt"
+        }
+      ]
+    },
+    {
+      "Group": 2,
+      "ByteIndex": 3,
+      "Bits": [
+        {
+          "Bit": 0,
+          "Property": "FunctionTermination",
+          "Description": "Funktionsavslutning aktiv"
+        },
+        {
+          "Bit": 1,
+          "Property": "SendTabs",
+          "Description": "Skickar tab-tecken"
+        },
+        {
+          "Bit": 2,
+          "Property": "FunctionKeypad",
+          "Description": "Funktionsknappsats aktiv"
+        },
+        {
+          "Bit": 3,
+          "Property": "MarginBell",
+          "Description": "Marginalklocka aktiv"
+        }
+      ]
+    },
+    {
+      "Group": 3,
+      "ByteIndex": 4,
+      "Bits": [
+        {
+          "Bit": 0,
+          "Property": "HostBaudRate",
+          "Description": "Host baud rate bit 0"
+        },
+        {
+          "Bit": 1,
+          "Property": "HostBaudRate",
+          "Description": "Host baud rate bit 1"
+        },
+        {
+          "Bit": 2,
+          "Property": "HostBaudRate",
+          "Description": "Host baud rate bit 2"
+        },
+        {
+          "Bit": 3,
+          "Property": "HostBaudRate",
+          "Description": "Host baud rate bit 3"
+        },
+        {
+          "Bit": 4,
+          "Property": "AuxBaudRate",
+          "Description": "Aux baud rate bit 0"
+        },
+        {
+          "Bit": 5,
+          "Property": "AuxBaudRate",
+          "Description": "Aux baud rate bit 1"
+        },
+        {
+          "Bit": 6,
+          "Property": "AuxBaudRate",
+          "Description": "Aux baud rate bit 2"
+        },
+        {
+          "Bit": 7,
+          "Property": "AuxBaudRate",
+          "Description": "Aux baud rate bit 3"
+        }
+      ]
+    },
+    {
+      "Group": 3,
+      "ByteIndex": 5,
+      "Bits": [
+        {
+          "Bit": 0,
+          "Property": "TwoStopBits",
+          "Description": "Tv\u00E5 stoppbitar anv\u00E4nds"
+        },
+        {
+          "Bit": 1,
+          "Property": "Rollover",
+          "Description": "Rollover aktivt"
+        },
+        {
+          "Bit": 2,
+          "Property": "Parity",
+          "Description": "Paritet bit 0"
+        },
+        {
+          "Bit": 3,
+          "Property": "Parity",
+          "Description": "Paritet bit 1"
+        },
+        {
+          "Bit": 4,
+          "Property": "Parity",
+          "Description": "Paritet bit 2"
+        }
+      ]
+    },
+    {
+      "Group": 4,
+      "ByteIndex": 6,
+      "Bits": [
+        {
+          "Bit": 0,
+          "Property": "IsColor",
+          "Description": "F\u00E4rgl\u00E4ge aktivt"
+        },
+        {
+          "Bit": 1,
+          "Property": "CursorBlink",
+          "Description": "Blinkande mark\u00F6r aktiv"
+        }
+      ]
+    },
+    {
+      "Group": 4,
+      "ByteIndex": 7,
+      "Bits": []
+    },
+    {
+      "Group": 5,
+      "ByteIndex": 8,
+      "Bits": [
+        {
+          "Bit": 0,
+          "Property": "StatusBarVisible",
+          "Description": "Statusf\u00E4ltet visas"
+        }
+      ]
+    },
+    {
+      "Group": 5,
+      "ByteIndex": 9,
+      "Bits": []
+    },
+    {
+      "Group": 6,
+      "ByteIndex": 10,
+      "Bits": [
+        {
+          "Bit": 0,
+          "Property": "AutoLineFeed",
+          "Description": "Automatisk LF aktiv"
+        },
+        {
+          "Bit": 1,
+          "Property": "LogicalAttributes",
+          "Description": "Logiska attribut anv\u00E4nds"
+        },
+        {
+          "Bit": 2,
+          "Property": "UseSpaceAsPad",
+          "Description": "Blanksteg anv\u00E4nds som fyllnad"
+        },
+        {
+          "Bit": 3,
+          "Property": "ScreenWrap",
+          "Description": "Radbrytning vid sk\u00E4rmkant"
+        },
+        {
+          "Bit": 4,
+          "Property": "TransmitModifiedOnly",
+          "Description": "Skickar endast modifierade tecken"
+        },
+        {
+          "Bit": 5,
+          "Property": "TwoPageBoundary",
+          "Description": "Tv\u00E5sidesgr\u00E4ns aktiv"
+        }
+      ]
+    },
+    {
+      "Group": 6,
+      "ByteIndex": 11,
+      "Bits": []
+    }
+  ]
+}

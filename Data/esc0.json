@@ -1,0 +1,81 @@
+{
+  "Esc0Command": [
+    {
+      "Sequence": "#!",
+      "Symbol": "\u2502",
+      "Description": "Vertical bar"
+    },
+    {
+      "Sequence": "#\u0022",
+      "Symbol": "\u2524",
+      "Description": "Right tee"
+    },
+    {
+      "Sequence": "#$",
+      "Symbol": "\u2534",
+      "Description": "Bottom tee"
+    },
+    {
+      "Sequence": "#%",
+      "Symbol": "\u252C",
+      "Description": "Top tee"
+    },
+    {
+      "Sequence": "#\u0026",
+      "Symbol": "\u251C",
+      "Description": "Left tee"
+    },
+    {
+      "Sequence": "#\u0027",
+      "Symbol": "\u2500",
+      "Description": "Horizontal bar"
+    },
+    {
+      "Sequence": "#(",
+      "Symbol": "\u253C",
+      "Description": "Cross"
+    },
+    {
+      "Sequence": "#)",
+      "Symbol": "\u2518",
+      "Description": "Bottom right corner"
+    },
+    {
+      "Sequence": "#*",
+      "Symbol": "\u250C",
+      "Description": "Top left corner"
+    },
+    {
+      "Sequence": "#\u002B",
+      "Symbol": "\u2510",
+      "Description": "Top right corner"
+    },
+    {
+      "Sequence": "#,",
+      "Symbol": "\u2514",
+      "Description": "Bottom left corner"
+    }
+  ],
+  "Esc0HexCommand": [
+    {
+      "Sequence": "69",
+      "Symbol": "\u2588",
+      "Description": "Full block"
+    },
+    {
+      "Sequence": "6A",
+      "Symbol": "\u2592",
+      "Description": "Medium shade"
+    },
+    {
+      "Sequence": "6B",
+      "Symbol": "\u2591",
+      "Description": "Light shade"
+    },
+    {
+      "Sequence": "6C",
+      "Symbol": "\u2593",
+      "Description": "Dark shade"
+    }
+  ]
+}

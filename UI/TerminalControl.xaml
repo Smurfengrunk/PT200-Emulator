@@ -1,0 +1,112 @@
+﻿<UserControl
+    x:Class="PT200Emulator.UI.TerminalControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="UserControl_Loaded">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <!--  Utdata-terminal  -->
+        <RichTextBox
+            x:Name="TerminalText"
+            HorizontalAlignment="Left"
+            Grid.Row="0"
+            AcceptsReturn="True"
+            AcceptsTab="True"
+            Background="Black"
+            BorderThickness="0"
+            FontFamily="Consolas"
+            FontSize="16"
+            Foreground="LimeGreen"
+            HorizontalScrollBarVisibility="Auto"
+            IsReadOnly="True"
+            VerticalScrollBarVisibility="Auto" />
+        <Rectangle
+            x:Name="CaretVisual"
+            Width="10"
+            Height="2"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Bottom"
+            Panel.ZIndex="20"
+            Fill="LimeGreen"
+            IsHitTestVisible="False"
+            RenderTransformOrigin="0,0"
+            Visibility="Collapsed" />
+        <!--  Transparent overlay för tangentinmatning  -->
+        <TextBox
+            x:Name="InputOverlay"
+            Grid.Row="0"
+            Panel.ZIndex="10"
+            Background="#01FFFFFF"
+            BorderBrush="Red"
+            BorderThickness="1"
+            Focusable="True"
+            IsHitTestVisible="True"
+            Opacity="10"
+            PreviewKeyDown="InputOverlay_PreviewKeyDown"
+            PreviewTextInput="InputOverlay_PreviewTextInput" />
+
+        <!--  Statusrad  -->
+        <StatusBar
+            x:Name="StatusBarElement"
+            Grid.Row="1"
+            Background="LimeGreen"
+            Foreground="Black">
+
+            <!--  Vänsterjusterad statustext  -->
+            <StatusBarItem HorizontalAlignment="Left">
+                <TextBlock
+                    x:Name="StatusText"
+                    VerticalAlignment="Center"
+                    Text="⏳ Terminalen laddar..." />
+            </StatusBarItem>
+
+            <StatusBarItem HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal">
+                    <!-- Fält för visualisering av Scroll Lock-->
+                    <TextBlock
+                        x:Name="ScrollLock"
+                        VerticalAlignment="Center"
+                        Foreground="LimeGreen"
+                        Background="Black"
+                        Text="| SCROLL "
+                        ToolTip="Scroll Lock är aktiv" />
+                    <!-- Fält för visualisering av Caps Lock-->
+                    <TextBlock
+                        x:Name="CapsLock"
+                        VerticalAlignment="Center"
+                        Foreground="LimeGreen"
+                        Background="Black"
+                        Text="| CAPS "
+                        ToolTip="Caps Lock är aktiv" />
+                    <!-- Fält för visualisering av Num Lock-->
+                    <TextBlock
+                        x:Name="NumLock"
+                        VerticalAlignment="Center"
+                        Foreground="LimeGreen"
+                        Background="Black"
+                        Text="| NUM "
+                        ToolTip="Num Lock är aktiv"/>
+                    <!--  Högerjusterad "hastighetsmätare"  -->
+                    <TextBlock
+                        x:Name="SpeedTextBlock"
+                        VerticalAlignment="Center"
+                        Text="| ↩ 0 B/s" />
+
+                    <!--  Högerjusterad klocka  -->
+                    <TextBlock
+                        x:Name="ClockTextBlock"
+                        Margin="5,0"
+                        VerticalAlignment="Center"
+                        Text="{Binding CurrentTime}" />
+                </StackPanel>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</UserControl>
