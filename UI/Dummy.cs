@@ -16,6 +16,7 @@ namespace PT200Emulator.DummyImplementations
         public event Action<byte[]> OnDcsResponse;
         public event Action<IReadOnlyList<TerminalAction>> ActionsReady = delegate { };
         public void Feed(ReadOnlySpan<byte> data) { /* gör inget */ }
+        public IScreenBuffer screenBuffer { get; private set; }
         public void TriggerDummy()
         {
             ActionsReady?.Invoke(Array.Empty<TerminalAction>());

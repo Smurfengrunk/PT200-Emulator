@@ -30,16 +30,25 @@ namespace PT200Emulator.Infrastructure.Networking
         public event Action Reconnected;
         public event Action Disconnected;
         public event Action<byte[], int> OnDataReceived;
+        public int GetDataReceivedHandlerCount()
+        {
+            return OnDataReceived?.GetInvocationList().Length ?? 0;
+        }
         public event Action<string> OnStatusUpdate;
+
+        private Task _receiveLoopTask;
+        private bool _receiveLoopRunning;
 
         public async Task ConnectAsync(string host, int port, CancellationToken cancellationToken)
         {
+            this.LogTrace($"[TcpClientTransport] ConnectAsync start – host: {host}, port: {port}");
+            if (_receiveLoopRunning)
+                await DisconnectAsync(); // Vänta ut gammal loop
+
             _manualDisconnect = false;
-            _host = host;
-            _port = port;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-            this.LogInformation($"Försöker ansluta till {host} {port}");
+            this.LogTrace($"Försöker ansluta till {host} {port}");
             try
             {
                 _client = new TcpClient();
@@ -48,7 +57,8 @@ namespace PT200Emulator.Infrastructure.Networking
                 IsConnected = true;
                 OnStatusUpdate?.Invoke("🟢 Ansluten");
 
-                _ = Task.Run(() => ReceiveLoopAsync(_cts.Token));
+                _receiveLoopRunning = true;
+                _receiveLoopTask = ReceiveLoopAsync(_cts.Token, host, port);
                 this.LogInformation($"Ansluten till {host} {port}");
             }
             catch (Exception ex)
@@ -56,6 +66,8 @@ namespace PT200Emulator.Infrastructure.Networking
                 OnStatusUpdate?.Invoke($"🔴 Kunde inte ansluta: {ex.Message}");
                 throw;
             }
+            _host = host;
+            _port = port;
         }
 
         public async Task DisconnectAsync()
@@ -65,8 +77,18 @@ namespace PT200Emulator.Infrastructure.Networking
 
             if (_stream != null)
             {
-                await _stream.DisposeAsync();
+                await _stream.DisposeAsync(); // ← Tvinga ReadAsync att kasta
                 _stream = null;
+            }
+
+            if (_receiveLoopTask != null)
+            {
+                try
+                {
+                    await _receiveLoopTask;
+                }
+                catch (OperationCanceledException) { }
+                _receiveLoopTask = null;
             }
 
             _client?.Close();
@@ -77,24 +99,24 @@ namespace PT200Emulator.Infrastructure.Networking
             OnStatusUpdate?.Invoke("🔴 Frånkopplad");
         }
 
-        public async Task SendAsync(byte[] data, CancellationToken cancellationToken)
+        public async Task SendAsync(byte[] data, CancellationToken cancellationToken, string host, int port)
         {
             if (_stream == null) return;
 
             try
             {
-                //this.LogDebug($"[SENDASYNC] data[0] = {data[0]}");
                 await _stream.WriteAsync(data, 0, data.Length, cancellationToken);
                 await _stream.FlushAsync(cancellationToken);
             }
             catch
             {
-                await TryReconnectAsync();
+                await TryReconnectAsync(host, port);
             }
         }
 
-        private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
+        private async Task ReceiveLoopAsync(CancellationToken cancellationToken, string host, int port)
         {
+            this.LogTrace($"[TcpClientTransport] ReceiveLoopAsync start – hash: {GetHashCode()}, task: {Task.CurrentId}");
             var buffer = new byte[4096];
 
             try
@@ -105,33 +127,39 @@ namespace PT200Emulator.Infrastructure.Networking
 
                     if (bytesRead == 0)
                     {
-                        await HandleDisconnectAsync();
+                        await HandleDisconnectAsync(host, port);
                         break;
                     }
 
                     var chunk = new byte[bytesRead];
                     Array.Copy(buffer, chunk, bytesRead);
+                    this.LogTrace($"[TcpClientTransport] Invoking OnDataReceived – chunk length: {chunk.Length}, handler count: {OnDataReceived?.GetInvocationList().Length}");
                     OnDataReceived?.Invoke(chunk, chunk.Length);
-                    this.LogDebug($"[RAW IN] {BitConverter.ToString(chunk)}");
+                    this.LogTrace($"[RAW IN] {BitConverter.ToString(chunk)}");
                 }
             }
             catch
             {
-                await HandleDisconnectAsync();
+                await HandleDisconnectAsync(host, port);
+            }
+            finally
+            {
+                _receiveLoopRunning = false;
+                this.LogTrace($"[TcpClientTransport] ReceiveLoopAsync avslutad – hash: {GetHashCode()}");
             }
         }
 
-        private async Task HandleDisconnectAsync()
+        private async Task HandleDisconnectAsync(string host, int port)
         {
             IsConnected = false;
             Disconnected?.Invoke();
             OnStatusUpdate?.Invoke("🔴 Anslutning tappad");
-            await TryReconnectAsync();
+            await TryReconnectAsync(host, port);
         }
 
-        private async Task TryReconnectAsync()
+        private async Task TryReconnectAsync(string host, int port)
         {
-            if (_manualDisconnect || _isReconnecting || string.IsNullOrEmpty(_host)) return;
+            if (_manualDisconnect || _isReconnecting || string.IsNullOrEmpty(host)) return;
 
             _isReconnecting = true;
             OnStatusUpdate?.Invoke("🔄 Försöker återansluta...");
@@ -141,7 +169,7 @@ namespace PT200Emulator.Infrastructure.Networking
                 try
                 {
                     await Task.Delay(3000);
-                    await ConnectAsync(_host!, _port, CancellationToken.None);
+                    await ConnectAsync(host, port, CancellationToken.None);
                     Reconnected?.Invoke();
                     return;
                 }
@@ -153,6 +181,30 @@ namespace PT200Emulator.Infrastructure.Networking
 
             OnStatusUpdate?.Invoke("❌ Kunde inte återansluta");
             _isReconnecting = false;
+        }
+
+        public async Task ReconnectAsync(string host, int port)
+        {
+            _manualDisconnect = false;
+            _isReconnecting = true;
+            OnStatusUpdate?.Invoke($"🔁 Manuell återanslutning till {host}:{port}...");
+
+            try
+            {
+                await DisconnectAsync(); // säkerställ att gammal loop är död
+                await ConnectAsync(host, port, CancellationToken.None); // starta ny loop
+                Reconnected?.Invoke();
+                OnStatusUpdate?.Invoke("🟢 Återansluten");
+            }
+            catch (Exception ex)
+            {
+                OnStatusUpdate?.Invoke($"❌ Återanslutning misslyckades: {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                _isReconnecting = false;
+            }
         }
 
         public async ValueTask DisposeAsync()

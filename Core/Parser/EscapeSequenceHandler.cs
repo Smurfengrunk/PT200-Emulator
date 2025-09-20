@@ -34,6 +34,21 @@ namespace PT200Emulator.Core.Parser
                 charTables.SelectG1();
 
             // Här kan du lägga till fler ESC-sekvenser vid behov
+            if (sequence.Substring(0) == "$")
+            {
+                switch (sequence.Substring(1))
+                {
+                    case "V":
+                        //Set status bra
+                        break;
+                    case "U":
+                        // Display status bar
+                        break;
+                    case "T":
+                        // Reset Status bar
+                        break;
+                }
+            }
         }
     }
 }

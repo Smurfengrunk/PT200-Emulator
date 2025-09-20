@@ -18,11 +18,12 @@ namespace PT200Emulator.Core.Parser
         private readonly OscHandler oscHandler;
         private readonly DollarCommandHandler dollarCommandHandler = new();
         public readonly DcsSequenceHandler dcsHandler;
-        public readonly IScreenBuffer screenBuffer;
+        public IScreenBuffer screenBuffer {  get; private set; }
         private List<byte> dcsBuffer = new();
         private readonly TerminalState termState;
         private readonly CsiSequenceHandler _csiHandler;
         private List<byte> _csiBuffer = new();
+
 
         public event Action<IReadOnlyList<TerminalAction>> ActionsReady;
         public event Action<byte[]> OnDcsResponse;
@@ -51,6 +52,7 @@ namespace PT200Emulator.Core.Parser
         }
         public TerminalParser(IDataPathProvider paths, TerminalState state, InputController controller)
         {
+            this.LogDebug($"[TERMINALPARSER] Startar ny Parser-instans med hash code {this.GetHashCode()}");
             var g0Path = Path.Combine(paths.CharTablesPath, "G0.json");
             var g1Path = Path.Combine(paths.CharTablesPath, "G1.json");
 
@@ -60,13 +62,14 @@ namespace PT200Emulator.Core.Parser
             dcsHandler = new DcsSequenceHandler(state, (Path.Combine(paths.BasePath, "Data", "DcsBitGroups.json")));
             percentHandler = new PercentHandler();
             oscHandler = new OscHandler();
-            dcsHandler = new DcsSequenceHandler(state, (Path.Combine(paths.BasePath, "Data", "DcsBitGroups.json")));
             this.termState = state ?? throw new ArgumentNullException(nameof(state));
             screenBuffer = state.ScreenBuffer;
             _controller = controller;
-            dcsHandler.OnDcsResponse += bytes => OnDcsResponse?.Invoke(bytes);
-            this.LogDebug($"[TERMINALPARSER] Hashcode = {this.GetHashCode()}, OnDcsResponse is {(OnDcsResponse == null ? "null" : "set")}");
-            this.LogDebug($"[TERMINALPARSER] Subscribers = {OnDcsResponse?.GetInvocationList().Length ?? 0}"); 
+            dcsHandler.OnDcsResponse += bytes =>
+            {
+                this.LogTrace($"[PARSER] OnDcsResponse wired, handler hash={dcsHandler.GetHashCode()}");
+                OnDcsResponse?.Invoke(bytes);
+            };
         }
 
         private void SetState(ParseState newState)
@@ -88,93 +91,94 @@ namespace PT200Emulator.Core.Parser
         public void Feed(byte[] data) => Feed(data.AsSpan());
         public void Feed(ReadOnlySpan<byte> data)
         {
-            this.LogDebug($"[FEED] Parser hash={this.GetHashCode()}, " +
-                          $"OnDcsResponse is {(OnDcsResponse == null ? "null" : "set")}, " +
-                          $"Subscribers={OnDcsResponse?.GetInvocationList().Length ?? 0}");
-            for (int i = 0; i < data.Length; i++)
+            using (screenBuffer.BeginUpdate())
             {
-                byte b = data[i];
-
-                switch (state)
+                this.LogTrace($"[TerminalParser.Feed] Feeding {data.Length} bytes");
+                for (int i = 0; i < data.Length; i++)
                 {
-                    case ParseState.Normal:
-                        if (b == 0x1B) // ESC
-                        {
-                            state = ParseState.Escape;
-                            seqBuffer.Clear();
-                            continue;
-                        }
-                        switch (b)
-                        {
-                            case 0x08: screenBuffer.Backspace(); break;
-                            case 0x09: screenBuffer.Tab(); break;
-                            case 0x0A: screenBuffer.LineFeed(); break;
-                            case 0x0D: screenBuffer.CarriageReturn(); break;
-                            default: screenBuffer.WriteChar(charTables.Translate(b)); break;
-                        }
-                        break;
+                    byte b = data[i];
 
-                    case ParseState.Escape:
-                        if (b == '[')
-                        {
-                            state = ParseState.CSI;
-                            seqBuffer.Clear();
-                            seqBuffer.Append((char)b);
-                        }
-                        else if (b == ']')
-                        {
-                            state = ParseState.OSC;
-                            seqBuffer.Clear();
-                            seqBuffer.Append((char)b);
-                        }
-                        else if (b == 'P')
-                        {
-                            state = ParseState.DCS;
-                            seqBuffer.Clear();
-                        }
-                        else
-                        {
-                            seqBuffer.Append((char)b);
-                            HandleEscOther(seqBuffer.ToString());
-                            state = ParseState.Normal;
-                        }
-                        break;
+                    switch (state)
+                    {
+                        case ParseState.Normal:
+                            if (b == 0x1B) // ESC
+                            {
+                                state = ParseState.Escape;
+                                seqBuffer.Clear();
+                                continue;
+                            }
+                            switch (b)
+                            {
+                                case 0x08: screenBuffer.Backspace(); break;
+                                case 0x09: screenBuffer.Tab(); break;
+                                case 0x0A: screenBuffer.LineFeed(); break;
+                                case 0x0D: screenBuffer.CarriageReturn(); break;
+                                default: screenBuffer.WriteChar(charTables.Translate(b)); break;
+                            }
+                            break;
 
-                    case ParseState.CSI:
-                        seqBuffer.Append((char)b);
-                        if (b >= 0x40 && b <= 0x7E)
-                        {
-                            HandleCsi(seqBuffer.ToString());
-                            seqBuffer.Clear();
-                            state = ParseState.Normal;
-                        }
-                        break;
+                        case ParseState.Escape:
+                            if (b == '[')
+                            {
+                                state = ParseState.CSI;
+                                seqBuffer.Clear();
+                                seqBuffer.Append((char)b);
+                            }
+                            else if (b == ']')
+                            {
+                                state = ParseState.OSC;
+                                seqBuffer.Clear();
+                                seqBuffer.Append((char)b);
+                            }
+                            else if (b == 'P')
+                            {
+                                state = ParseState.DCS;
+                                seqBuffer.Clear();
+                            }
+                            else
+                            {
+                                seqBuffer.Append((char)b);
+                                HandleEscOther(seqBuffer.ToString());
+                                state = ParseState.Normal;
+                            }
+                            break;
 
-                    case ParseState.OSC:
-                        seqBuffer.Append((char)b);
-                        if (b == 0x07 || (seqBuffer.Length >= 2 && seqBuffer[^2] == 0x1B && seqBuffer[^1] == '\\'))
-                        {
-                            HandleOsc(seqBuffer.ToString());
-                            seqBuffer.Clear();
-                            state = ParseState.Normal;
-                        }
-                        break;
-
-                    case ParseState.DCS:
-                        // Leta efter ESC \
-                        if (b == 0x1B && i + 1 < data.Length && data[i + 1] == 0x5C)
-                        {
-                            this.LogDebug("[Parser Feed] Esc P Esc \\ - statusförfrågan");
-                            HandleDcs(seqBuffer.ToString());
-                            seqBuffer.Clear();
-                            state = ParseState.Normal;
-                            i++; // hoppa över '\'
-                        }
-                        else
-                        {
+                        case ParseState.CSI:
                             seqBuffer.Append((char)b);
-                        }
-                        break;
+                            if (b >= 0x40 && b <= 0x7E)
+                            {
+                                HandleCsi(seqBuffer.ToString());
+                                seqBuffer.Clear();
+                                state = ParseState.Normal;
+                            }
+                            break;
+
+                        case ParseState.OSC:
+                            seqBuffer.Append((char)b);
+                            if (b == 0x07 || (seqBuffer.Length >= 2 && seqBuffer[^2] == 0x1B && seqBuffer[^1] == '\\'))
+                            {
+                                HandleOsc(seqBuffer.ToString());
+                                seqBuffer.Clear();
+                                state = ParseState.Normal;
+                            }
+                            break;
+
+                        case ParseState.DCS:
+                            // Leta efter ESC \
+                            if (b == 0x1B && i + 1 < data.Length && data[i + 1] == 0x5C)
+                            {
+                                this.LogTrace("[Parser Feed] Esc P Esc \\ - statusförfrågan");
+                                HandleDcs(seqBuffer.ToString());
+                                seqBuffer.Clear();
+                                state = ParseState.Normal;
+                                i++; // hoppa över '\'
+                            }
+                            else
+                            {
+                                seqBuffer.Append((char)b);
+                            }
+                            break;
+                    }
                 }
             }
         }
@@ -198,7 +202,7 @@ namespace PT200Emulator.Core.Parser
         private void HandleSingleEsc(string sequence) => escHandler.Handle(sequence);
         private void HandleOsc(string sequence) => oscHandler.Handle(sequence);
         private void HandleEncoding(string sequence) => percentHandler.Handle(sequence);
-        private void HandleCsi(string sequence) => _csiHandler.Handle(sequence);
+        private void HandleCsi(string sequence) => _csiHandler.Handle(sequence, termState, screenBuffer);
         private void HandleCharset(string sequence) => escHandler.Handle(sequence);
         private void HandleDcs(string sequence) => dcsHandler.Handle(Encoding.ASCII.GetBytes(sequence), _controller);
 

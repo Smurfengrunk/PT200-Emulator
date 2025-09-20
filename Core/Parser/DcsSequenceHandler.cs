@@ -34,7 +34,7 @@ namespace PT200Emulator.Core.Parser
             const string jsonPath = "Data/DcsBitGroups.json";
             if (payload.Length == 0)
             {
-                this.LogInformation("[DCS] Tom DCS mottagen – statusförfrågan.");
+                this.LogDebug("[DCS] Tom DCS mottagen – statusförfrågan.");
                 RaiseStatus("🟡 Väntar på DCS");
                 var dcs = state.BuildDcs(jsonPath);
                 SendDcsResponse(dcs, _controller);
@@ -42,7 +42,7 @@ namespace PT200Emulator.Core.Parser
             }
 
             var content = Encoding.ASCII.GetString(payload);
-            this.LogInformation($"[DCS] Innehåll: {content}");
+            this.LogDebug($"[DCS] Innehåll: {content}");
             this.LogDebug($"[DCS] Payload: {BitConverter.ToString(payload)}");
             this.LogDebug($"[DCS] Tolkat innehåll: {content}");
 
@@ -53,15 +53,12 @@ namespace PT200Emulator.Core.Parser
 
         private void SendDcsResponse(string dcs, InputController _controller)
         {
-            this.LogDebug($"[FEED] Parser hash={this.GetHashCode()}, " +
-              $"OnDcsResponse is {(OnDcsResponse == null ? "null" : "set")}, " +
-              $"Subscribers={OnDcsResponse?.GetInvocationList().Length ?? 0}");
-            this.LogDebug($"[SENDDCSRESPONSE] Hashcode = {this.GetHashCode()} OnDcs Hashcode = {OnDcsResponse.GetHashCode()}");
             this.LogDebug($"[DCS] OnDcsResponse is {(OnDcsResponse == null ? "null" : "set")}");
             this.LogDebug($"[DCS] Controller hash = {_controller.GetHashCode()}"); this.LogInformation($"[DCS Response] {dcs}, Längd på respons = {dcs.Length}");
             var hex = BitConverter.ToString(Encoding.ASCII.GetBytes(dcs));
-            this.LogInformation($"[DCS Response HEX] {hex}, Längd = {dcs.Length}");
+            this.LogDebug($"[DCS Response HEX] {hex}, Längd = {dcs.Length}");
             var bytes = Encoding.ASCII.GetBytes(dcs);
+            this.LogTrace($"[DCS] Using handler hash={this.GetHashCode()}");
             OnDcsResponse?.Invoke(bytes);
         }
         public static IReadOnlyList<TerminalAction> Build(string content)

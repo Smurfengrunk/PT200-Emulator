@@ -2,20 +2,25 @@
     x:Class="PT200Emulator.UI.TerminalControl"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Loaded="UserControl_Loaded">
+    Loaded="UserControl_Loaded"
+    SnapsToDevicePixels="True"
+    UseLayoutRounding="True"
+    TextOptions.TextFormattingMode="Display"
+    TextOptions.TextHintingMode="Fixed"
+    TextOptions.TextRenderingMode="Aliased">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
         <!--  Utdata-terminal  -->
         <RichTextBox
             x:Name="TerminalText"
-            HorizontalAlignment="Left"
+            HorizontalAlignment="Stretch"
             Grid.Row="0"
             AcceptsReturn="True"
             AcceptsTab="True"
@@ -26,13 +31,15 @@
             Foreground="LimeGreen"
             HorizontalScrollBarVisibility="Auto"
             IsReadOnly="True"
-            VerticalScrollBarVisibility="Auto" />
+            VerticalScrollBarVisibility="Auto"
+            Padding="0"
+            VerticalAlignment="Top" />
         <Rectangle
             x:Name="CaretVisual"
-            Width="10"
+            Width="8"
             Height="2"
             HorizontalAlignment="Left"
-            VerticalAlignment="Bottom"
+            VerticalAlignment="Top"
             Panel.ZIndex="20"
             Fill="LimeGreen"
             IsHitTestVisible="False"
@@ -73,24 +80,24 @@
                     <TextBlock
                         x:Name="ScrollLock"
                         VerticalAlignment="Center"
-                        Foreground="LimeGreen"
-                        Background="Black"
+                        Foreground="Red"
+                        Background="LimeGreen"
                         Text="| SCROLL "
                         ToolTip="Scroll Lock är aktiv" />
                     <!-- Fält för visualisering av Caps Lock-->
                     <TextBlock
                         x:Name="CapsLock"
                         VerticalAlignment="Center"
-                        Foreground="LimeGreen"
-                        Background="Black"
+                        Foreground="Purple"
+                        Background="LimeGreen"
                         Text="| CAPS "
                         ToolTip="Caps Lock är aktiv" />
                     <!-- Fält för visualisering av Num Lock-->
                     <TextBlock
                         x:Name="NumLock"
                         VerticalAlignment="Center"
-                        Foreground="LimeGreen"
-                        Background="Black"
+                        Foreground="Black"
+                        Background="LimeGreen"
                         Text="| NUM "
                         ToolTip="Num Lock är aktiv"/>
                     <!--  Högerjusterad "hastighetsmätare"  -->

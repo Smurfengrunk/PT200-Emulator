@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Windows.Media;
 
 namespace PT200Emulator.Core.Parser
 {
@@ -102,32 +103,57 @@ namespace PT200Emulator.Core.Parser
         public bool PrintMode { get; set; }
         public ScreenBuffer ScreenBuffer { get; set; }
 
+        public Brush DisplayTypeToBrush(DisplayType display)
+        {
+            switch (display)
+            {
+                case DisplayType.Green:
+                    return Brushes.LimeGreen;
+                case DisplayType.White:
+                    return Brushes.White;
+                case DisplayType.Amber:
+                    return Brushes.Orange;
+                case DisplayType.Blue:
+                    return Brushes.Blue;
+                default:
+                    return Brushes.White;
+            }
+        }
+
         public TerminalState()
+        {
+            screenFormat = ScreenFormat.S80x24; // eller default från config
+            ScreenBuffer = new ScreenBuffer(24, 80, DisplayTypeToBrush(Display), Brushes.Black); // första instans
+            Cols = 80;
+            Rows = 24;
+        }
+
+        public void SetScreenFormat()
         {
             switch (screenFormat)
             {
                 case ScreenFormat.S80x24:
-                    ScreenBuffer = new ScreenBuffer(24, 80);
+                    ScreenBuffer.Resize(24, 80);
                     Cols = 80;
                     Rows = 24;
                     break;
                 case ScreenFormat.S80x48:
-                    ScreenBuffer = new ScreenBuffer(48, 80);
+                    ScreenBuffer.Resize(48, 80);
                     Cols = 80;
                     Rows = 48;
                     break;
                 case ScreenFormat.S132x27:
-                    ScreenBuffer = new ScreenBuffer(27, 132);
+                    ScreenBuffer.Resize(27, 132);
                     Cols = 132;
                     Rows = 27;
                     break;
                 case ScreenFormat.S160x24:
-                    ScreenBuffer = new ScreenBuffer(24, 160);
+                    ScreenBuffer.Resize(24, 160);
                     Cols = 160;
                     Rows = 24;
                     break;
-                default: // För att undvika den ständigt närvarande null-varningen
-                    ScreenBuffer = new ScreenBuffer(24, 80);
+                default:
+                    ScreenBuffer.Resize(24, 80);
                     Cols = 80;
                     Rows = 24;
                     break;

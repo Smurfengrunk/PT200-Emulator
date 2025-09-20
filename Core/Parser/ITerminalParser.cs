@@ -1,4 +1,5 @@
-﻿using PT200Emulator.Core.Input;
+﻿using PT200Emulator.Core.Emulator;
+using PT200Emulator.Core.Input;
 using System;
 using System.Collections.Generic;
 
@@ -9,6 +10,8 @@ namespace PT200Emulator.Core.Parser
         void Feed(ReadOnlySpan<byte> data);
         event Action<IReadOnlyList<TerminalAction>> ActionsReady;
         event Action<byte[]> OnDcsResponse;
+        IScreenBuffer screenBuffer { get; }
+
     }
 
     // Placeholder – flyttas eller byggs ut senare

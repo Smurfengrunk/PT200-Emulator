@@ -19,9 +19,9 @@ namespace PT200Emulator.Core.Input
         public int BaudRate { get; set; } = 9600;
 
         internal readonly ITerminalParser _parser;
-        private readonly TerminalState state = new();
+        private readonly TerminalState state;
         private readonly CommandRouter router;
-        private readonly TerminalState _state;
+        internal readonly TerminalState _state;
         public TerminalState.DisplayType DisplayTheme { get; set; }
         public IScreenBuffer ScreenBuffer => _state.ScreenBuffer;
 
@@ -40,14 +40,15 @@ namespace PT200Emulator.Core.Input
             router = new CommandRouter(controller, state);
 
             DisplayTheme = _state.Display;
+            this.LogDebug($"[TERMINALSESSION] Hashcode: {this.GetHashCode()}");
+
         }
 
         public Task InitializeAsync()
         {
-            this.LogDebug($"[INITIALIZEASYNC] Controller = {Controller.GetHashCode()}");
             _parser.OnDcsResponse += data =>
             {
-                this.LogDebug($"[INITIALIZEASYNC/ONDCSRESPONSE] data = {Encoding.ASCII.GetChars(data)}, Controller = {Controller.GetHashCode()}");
+                this.LogTrace($"[INITIALIZEASYNC/ONDCSRESPONSE] data = {Encoding.ASCII.GetChars(data)}, Controller = {Controller.GetHashCode()}");
                 _ = Controller.SendRawAsync(data)
                     .ContinueWith(t => this.LogError($"Fel vid DCS-sändning: {t.Exception}"),
                                   TaskContinuationOptions.OnlyOnFaulted);
@@ -55,17 +56,11 @@ namespace PT200Emulator.Core.Input
 
             _parser.ActionsReady += actions =>
             {
-                this.LogDebug($"[Session] {actions.Count} action(s) mottagna");
+                this.LogTrace($"[Session] {actions.Count} action(s) mottagna");
                 router.Route(actions);
             };
 
             return Task.CompletedTask;
-        }
-
-        public void ProcessIncomingData(byte[] data)
-        {
-            this.LogInformation($"[ProcessIncomingData] data = {Encoding.ASCII.GetString(data)}");
-            _parser.Feed(data);
         }
     }
 }

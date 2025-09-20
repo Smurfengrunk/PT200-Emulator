@@ -10,7 +10,6 @@ namespace PT200Emulator.Core.Input
     public class InputController
     {
         private readonly IInputMapper _mapper;
-        private readonly ITransport _transport;
         public Func<byte[], Task> SendBytes { get; set; }
         public InputController(IInputMapper mapper, Func<byte[], Task> sendBytes)
         {
@@ -18,22 +17,10 @@ namespace PT200Emulator.Core.Input
             SendBytes = sendBytes;
         }
 
-        public async Task HandleTextAsync(string text)
-        {
-            if (!string.IsNullOrEmpty(text))
-            {
-                var bytes = Encoding.ASCII.GetBytes(text);
-                this.LogDebug($"InputController: sending text bytes {BitConverter.ToString(bytes)}");
-                await _transport.SendAsync(bytes, CancellationToken.None);
-            }
-        }
-
         public async Task SendRawAsync(byte[] data)
         {
-            this.LogDebug($"[SENDRAWASYNC] data = {Encoding.ASCII.GetChars(data)}, Controller = {this.GetHashCode()}");
             if (data != null && data.Length > 0)
             {
-                this.LogDebug($"[SendRawAsync] {BitConverter.ToString(data)}");
                 await SendBytes(data);
             }
         }

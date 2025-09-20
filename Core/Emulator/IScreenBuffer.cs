@@ -30,6 +30,12 @@
         void ClearScreen();
         void ClearLine(int row);
         StyleInfo GetStyle(int row, int col);
+        public int GetBufferUpdatedHandlerCount();
+        public IDisposable BeginUpdate();
+        public event Action<int, int> CursorMoved;
+        public bool GetDirty();
+        public void MarkDirty();
+        public void ClearDirty();
 
 
         // Optional: full buffer resize (if you need it later)

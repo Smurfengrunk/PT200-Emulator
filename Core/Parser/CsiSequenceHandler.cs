@@ -1,4 +1,5 @@
-﻿using PT200Emulator.Infrastructure.Logging;
+﻿using PT200Emulator.Core.Emulator;
+using PT200Emulator.Infrastructure.Logging;
 using PT200Emulator.UI;
 using System;
 using System.Collections.Generic;
@@ -15,31 +16,50 @@ namespace PT200Emulator.Core.Parser
     public class CsiSequenceHandler
     {
         private readonly CsiCommandTable table;
+        private bool isPrivate;
+        private string rawParams, paramStr, command;
+        private string[] parameters;
 
         public CsiSequenceHandler(CsiCommandTable table)
         {
             this.table = table;
         }
 
-        public void Handle(string sequence)
+        public void Handle(string sequence, TerminalState terminal, IScreenBuffer buffer)
         {
             this.LogDebug($"[CSI] Sekvens mottagen: ESC[{sequence}");
             // Exempel: "12;24H"
-            var match = Regex.Match(sequence, @"^([\d;]*)([A-Za-z])$");
+            var match = Regex.Match(sequence, @"^([\?\d;]*)([A-Za-z])$");
             if (!match.Success) return;
 
-            var paramStr = match.Groups[1].Value;
-            var command = match.Groups[2].Value;
+            bool isPrivate = rawParams.StartsWith("?");
+            if (isPrivate) paramStr = match.Groups[1].Value;
+            command = match.Groups[2].Value;
 
             if (table.TryGet(command, out var def))
             {
-                var parameters = paramStr.Split(';').Select(p => p.Trim()).ToArray();
+                parameters = paramStr.Split(';').Select(p => p.Trim()).ToArray();
                 if (def != null) this.LogDebug($"[CSI] {def.Description} → {string.Join(", ", parameters)}"); else this.LogDebug("[CSI] CsiCommandTable not initialized");
                 // Här kan du trigga en TerminalAction eller uppdatera TerminalState
             }
             else
             {
                 this.LogDebug($"[CSI] Okänd sekvens: ESC[{sequence}");
+            }
+            switch (command)
+            {
+                case "H": // CUP
+                    buffer.SetCursorPosition(
+                        int.Parse(parameters.ElementAtOrDefault(0)),
+                        int.Parse(parameters.ElementAtOrDefault(1)));
+                    break;
+
+                case "Y": // SRN
+                    buffer.SetCursorPosition(buffer.CursorCol, int.Parse(parameters.ElementAtOrDefault(0)));
+                    break;
+
+                    // System line controls är inte CSI utan ESC $ X
+                    // Dessa fångas i din ESC-dispatch, inte CSI-handlern
             }
         }
     }

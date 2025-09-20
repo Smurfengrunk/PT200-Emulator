@@ -15,8 +15,9 @@ namespace PT200Emulator.Protocol
 
         public void Feed(byte[] buffer, int length)
         {
-            //this.LogDebug($"[INTERPRETER FEED] len={length} data={BitConverter.ToString(buffer, 0, length)}");
+            var cleanData = new List<byte>(); // Ny buffert för ren data
             int i = 0;
+
             while (i < length)
             {
                 byte b = buffer[i];
@@ -28,7 +29,7 @@ namespace PT200Emulator.Protocol
 
                     if (command == 0xFF) // Escaped 0xFF
                     {
-                        OnDataBytes?.Invoke(new byte[] { 0xFF });
+                        cleanData.Add(0xFF);
                         i++;
                         continue;
                     }
@@ -73,7 +74,7 @@ namespace PT200Emulator.Protocol
 
                             case 0xFE: // DONT
                             case 0xFC: // WONT
-                                // Ignorera
+                                       // Ignorera
                                 break;
                         }
                         i++;
@@ -88,17 +89,22 @@ namespace PT200Emulator.Protocol
                 }
                 else
                 {
-                    // Ren data-byte
-                    OnDataBytes?.Invoke(new byte[] { b });
+                    // Lägg till ren data i blockbufferten
+                    cleanData.Add(b);
                     i++;
                 }
+            }
+
+            // Skicka hela blocket på en gång
+            if (cleanData.Count > 0)
+            {
+                OnDataBytes?.Invoke(cleanData.ToArray());
             }
         }
 
         private void SendTelnetResponse(byte command, byte option)
         {
             byte[] response = { 0xFF, command, option };
-            //this.LogDebug($"[TELNET RESP] {BitConverter.ToString(response)}");
             OnSendToServer?.Invoke(response);
         }
 
@@ -111,7 +117,7 @@ namespace PT200Emulator.Protocol
 
         public Task SendToServer(byte[] bytes)
         {
-            this.LogDebug($"[SEND TO SERVER] {BitConverter.ToString(bytes)}");
+            this.LogTrace($"[SEND TO SERVER] {BitConverter.ToString(bytes)}");
             OnSendToServer?.Invoke(bytes);
             return Task.CompletedTask;
         }
