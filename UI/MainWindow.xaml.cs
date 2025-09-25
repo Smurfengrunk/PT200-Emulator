@@ -28,16 +28,17 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using System.Windows.Threading;
-using static PT200Emulator.Core.Config.TransportConfig;
-using static PT200Emulator.UI.TerminalControl;
+using Windows.Media.Capture;
 
 namespace PT200Emulator.UI
 {
     public partial class MainWindow : Window
     {
-        internal ILoggerFactory _loggerFactory;
-        internal ILogger _logger;
+        private ILoggerFactory loggerFactory;
+        private ILogger _logger;
+        internal static ILogger Logger { get; private set; }
         private ITransport _transport;
         private ITerminalParser _parser;
         private readonly IRenderer _renderer;
@@ -54,8 +55,15 @@ namespace PT200Emulator.UI
         private DcsSequenceHandler dcsHandler;
         private DataPathProvider dataPathProvider;
         private TerminalState state;
+        private VisualAttributeManager visualAttributeManager = new VisualAttributeManager();
+        internal static ScreenBuffer ScreenBuffer {  get; private set; }
         private string basePath;
         private readonly TimeSpan _burstIdle = TimeSpan.FromMilliseconds(8);
+        private TransportConfig cfg;
+        private UiConfig _uiConfig;
+        private CsiSequenceHandler csiHandler;
+        private ModeManager modeManager;
+        private LocalizationProvider localizationProvider;
         
         // Fält
         private CancellationTokenSource _burstCts;
@@ -82,6 +90,8 @@ namespace PT200Emulator.UI
         private static extern bool FreeConsole();
 
         public bool TerminalReady { get; private set; }
+        internal ILoggerFactory LoggerFactory { get => loggerFactory; set => loggerFactory = value; }
+
         private bool _isConnected = false;
 
         public MainWindow() : this(null, null, null, null, null, null) { }
@@ -96,22 +106,31 @@ namespace PT200Emulator.UI
         {
             InitializeComponent();
 
-            _loggerFactory = loggerFactory ?? LoggerFactoryProvider.Instance;
-            _logger = _loggerFactory.CreateLogger("MainWindow");
-            LoggerFactoryProvider.SetMinimumLevel(LogLevel.Trace);
-            LogLevelCombo.ItemsSource = Enum.GetValues(typeof(LogLevel));
-            LogLevelCombo.SelectedItem = LoggerFactoryProvider.GetMinimumLevel();
-            LogLevelCombo.SelectionChanged += (s, e) =>
-            {
-                if (LogLevelCombo.SelectedItem is LogLevel level)
-                    LoggerFactoryProvider.SetMinimumLevel(level);
-            };
-
             basePath = AppDomain.CurrentDomain.BaseDirectory;
             dataPathProvider = new DataPathProvider(basePath);
-
-            state = new TerminalState();
+            state = new TerminalState(new CharTableManager(System.IO.Path.Combine(basePath, "data", "chartables", "g0.json"), System.IO.Path.Combine(basePath, "data", "chartables", "g1.json")), basePath);
+            ScreenBuffer = state.ScreenBuffer;
+            this.LogDebug($"[MAINWINDOW] Jobbar med TerminalState hashcode {state.GetHashCode()}");
             InitializeTerminal();
+
+            _configService = new ConfigService(System.IO.Path.Combine(basePath, "config"));
+            cfg = _configService.LoadTransportConfig();
+            _uiConfig = _configService.LoadUiConfig();
+            LogLevelCombo.ItemsSource = Enum.GetValues(typeof(LogLevel));
+            LogLevelCombo.SelectionChanged += (s, e) =>
+            {
+                this.LogTrace($"SelectionChanged fired. SelectedItem type: {LogLevelCombo.SelectedItem?.GetType().FullName ?? "null"}");
+                if (LogLevelCombo.SelectedItem is LogLevel level)
+                {
+                    LoggerFactoryProvider.SetMinimumLevel(level);
+                    this.LogInformation($"Loggnivå ändrad till {level}");
+                }
+            };
+            LoadUiConfig();
+
+            LoggerFactory = loggerFactory ?? new LoggerFactory();
+            _logger = LoggerFactory.CreateLogger("MainWindow");
+            Logger = _logger;
 
             _transport = transport ?? new TcpClientTransport();
             _renderer = renderer ?? new DummyImplementations.Renderer();
@@ -119,10 +138,8 @@ namespace PT200Emulator.UI
 
             _telnetInterpreter = new TelnetInterpreter();
             _inputController = new InputController(_inputMapper, bytes => _telnetInterpreter.SendToServer(bytes));
-            //_parser = parser ?? new TerminalParser(dataPathProvider, state, _inputController);
 
             // Koppla UI till parserns aktuella buffer
-            Terminal.AttachToBuffer(state.ScreenBuffer);
             Terminal.InputController = _inputController;
             Terminal.InputMapper = _inputMapper;
 
@@ -133,8 +150,6 @@ namespace PT200Emulator.UI
             _txChannel = Channel.CreateUnbounded<byte[]>();
             _rxChannel = Channel.CreateUnbounded<byte[]>();
 
-            _configService = new ConfigService();
-            var cfg = _configService.LoadTransportConfig();
             HostTextBox.Text = cfg.Host;
             PortTextBox.Text = cfg.Port.ToString();
 
@@ -161,12 +176,16 @@ namespace PT200Emulator.UI
                     this.LogDebug($"[OnLogCountChanged] Kunde inte sätta indikator pga. {ex}");
                 }
             };
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                Terminal.SetDisplayTheme(_uiConfig.DisplayTheme);
+            }), DispatcherPriority.ApplicationIdle);
         }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            this.LogDebug($"[WINDOW_LOADED] Jobbar med TerminalState hashcode {state.GetHashCode()}");
             Terminal.FocusInput();
-
             Terminal.StatusText.Text = _transport.IsConnected ? "🟢 Ansluten" : "🔴 Frånkopplad";
 
             _inputController.SendBytes += async bytes =>
@@ -175,16 +194,16 @@ namespace PT200Emulator.UI
             };
 
             // Auto-connect vid start
-            var cfg = _configService.LoadTransportConfig();
-            Connect(cfg.Host, cfg.Port);
-
-            // Initiera terminalen
-            await Terminal.InitializeSession(session);
+            localizationProvider = new LocalizationProvider();
+            modeManager = new ModeManager(localizationProvider);
+            await ConnectAsync(cfg.Host, cfg.Port);
+            csiHandler = _parser._csiHandler;
+            dcsHandler = _parser._dcsHandler;
 
             LogTerminalHealth();
             // Event från DCS-hanteraren
             // Efter att parser och session är skapade i Connect() eller direkt efter Connect() i Window_Loaded:
-            dcsHandler = new DcsSequenceHandler(state, Path.Combine(basePath, "Data", "DcsBitGroups.json"));
+            dcsHandler = new DcsSequenceHandler(state, System.IO.Path.Combine(basePath, "Data", "DcsBitGroups.json"));
 
             // Koppla events
             dcsHandler.OnStatusUpdate += msg =>
@@ -195,40 +214,6 @@ namespace PT200Emulator.UI
                 Dispatcher.Invoke(() => Terminal.UpdateStatus(msg, Brushes.Black));
 
             this.LogTrace($"[MainWindow] Kopplar in OnDataReceived");
-
-            _transport.OnDataReceived += (buffer, length) =>
-            {
-                // Hämta konkreta bufferten via bridge/parser
-                var screenBuffer = _telnetSessionBridge?.Parser?.screenBuffer; // se not nedan om typer
-
-                if (screenBuffer == null)
-                    return;
-
-                // Starta burst vid första chunk
-                if (!_burstActive)
-                {
-                    _burstActive = true;
-                    _burstScope = screenBuffer.BeginUpdate(); // INTE EndUpdate; vi sparar scopet och Disposar senare
-                }
-
-                _telnetSessionBridge.Feed(buffer, length);
-
-                // Restart burst-idle-timer
-                _burstCts?.Cancel();
-                _burstCts = new CancellationTokenSource();
-                var token = _burstCts.Token;
-
-                Task.Delay(_burstIdle, token).ContinueWith(_ =>
-                {
-                    if (!token.IsCancellationRequested)
-                    {
-                        // Stäng bursten genom att Dispos:a scopet
-                        _burstScope?.Dispose();
-                        _burstScope = null;
-                        _burstActive = false;
-                    }
-                }, TaskScheduler.Default);
-            };
 
             _transport.Disconnected += () =>
             {
@@ -243,6 +228,7 @@ namespace PT200Emulator.UI
                 });
 
             Terminal.StatusText.Text = _transport.IsConnected ? "🟢 Ansluten" : "🔴 Frånkopplad";
+            ScreenBuffer.RowLocks.LogLockedRows(Logger);
         }
 
         private void Window_PreviewKeyDown(object sender, KeyEventArgs e) { }
@@ -263,6 +249,7 @@ namespace PT200Emulator.UI
                 NativeMethods.ShowWindow(consoleHandle, SW_HIDE);
             else
                 NativeMethods.ShowWindow(consoleHandle, SW_SHOW);
+            Terminal.FocusInput();
         }
 
         private void SetWhiteDisplay(object sender, RoutedEventArgs e)
@@ -297,9 +284,9 @@ namespace PT200Emulator.UI
             }
 
             var cfg = new TransportConfig { Host = host, Port = port };
-            cfg.Save();
-
-            Connect(host, port);
+            _configService.SaveTransportConfig(cfg);
+            _configService.SaveUiConfig(_uiConfig);
+            await ConnectAsync(host, port);
             Terminal.FocusInput();
         }
 
@@ -320,40 +307,41 @@ namespace PT200Emulator.UI
             Terminal.FocusInput();
         }
 
-
-
-        private async void Connect(string host, int port)
+        private async Task ConnectAsync(string host, int port)
         {
             this.LogDebug($"[MainWindow] Connect() called – host: {host}, port: {port}");
-
             try
             {
                 TerminalReady = false;
 
-                // 1. Stäng ner gamla resurser
                 _oldBridge?.Dispose();
-                _transport?.DisposeAsync();
+                if (_transport != null)
+                    await _transport.DisposeAsync();
                 _transport = new TcpClientTransport();
 
-                // 2. Skapa ny state, parser och interpreter för varje session
-                //state = new TerminalState();
-                Terminal.SetTerminalState(state);
-
+                // 1) Skapa tolk + input först
                 _telnetInterpreter = new TelnetInterpreter();
-                _inputController = new InputController(_inputMapper, bytes => _telnetInterpreter.SendToServer(bytes));
-                _parser = new TerminalParser(dataPathProvider, state, _inputController);
+                _inputController = new InputController(_inputMapper, b => _telnetInterpreter.SendToServer(b));
 
-                // 3. Koppla UI till parserns aktuella buffer
+                // 2) UI kopplas nu när rätt controller finns
+                this.LogDebug($"[CONNECTASYNC] Jobbar med TerminalState hashcode {state.GetHashCode()}");
                 Terminal.AttachToBuffer(state.ScreenBuffer);
                 Terminal.InputController = _inputController;
 
+                // 3) Parser + session
+                _parser = new TerminalParser(dataPathProvider, state, _inputController, modeManager, Terminal);
                 session = new TerminalSession(_inputController, _inputMapper, basePath, state, _parser);
-                await Terminal.InitializeSession(session);
+                await Terminal.InitializeSession(session, _uiConfig);
+
+                // 4) Priming render och sanity-check
+                var count = state.ScreenBuffer.GetBufferUpdatedHandlerCount();
+                if (count == 0) this.LogWarning("UI är inte kopplat till bufferten!");
+                Terminal.RenderFromBuffer(state.ScreenBuffer);
 
                 this.LogTrace($"[CONNECT] BufferUpdated handler count: {state.ScreenBuffer.GetBufferUpdatedHandlerCount()}");
                 this.LogTrace($"[CONNECT] ScreenBuffer Hashcode: {state.ScreenBuffer.GetHashCode()}");
 
-                // 4. Skapa bridge och koppla events innan connect
+                // 5) Bridge
                 _telnetSessionBridge = new TelnetSessionBridge(
                     _telnetInterpreter,
                     _parser,
@@ -362,13 +350,25 @@ namespace PT200Emulator.UI
                 );
                 _oldBridge = _telnetSessionBridge;
 
-                // Koppla transportens OnDataReceived till bridgen
+                // 6) Viktigt: koppla nya InputController → Bridge (efter att bridgen skapats)
+                _inputController.SendBytes = null; // säkerställ inga gamla handlers hänger kvar
+                _inputController.SendBytes += async bytes => await _telnetSessionBridge.SendFromClient(bytes);
+
+                // 7) Data in: clamp:a idle så vi aldrig väntar sekunder
                 _transport.OnDataReceived += (buffer, length) =>
                 {
-                    var sb = _telnetSessionBridge?.Parser?.screenBuffer;
+                    this.LogTrace($"[ONDATARECEIVED] Inkommande data {Encoding.ASCII.GetString(buffer)} längd {length}");
+                    var sb = state?.ScreenBuffer;
                     if (sb == null || length <= 0) return;
 
                     var idle = ComputeIdleWindow(length);
+                    // Clamp för interaktivitet (t.ex. 8–50 ms)
+                    var min = TimeSpan.FromMilliseconds(8);
+                    var max = TimeSpan.FromMilliseconds(50);
+                    if (idle < min) idle = min;
+                    if (idle > max) idle = max;
+
+                    this.LogTrace($"[BURST] length={length}, idle={idle.TotalMilliseconds}ms");
 
                     if (!_burstActive)
                     {
@@ -382,7 +382,6 @@ namespace PT200Emulator.UI
                     _burstBytes += length;
                     _burstChunks++;
 
-                    // restart timer
                     _burstCts?.Cancel();
                     _burstCts = new CancellationTokenSource();
                     var token = _burstCts.Token;
@@ -390,17 +389,9 @@ namespace PT200Emulator.UI
                     Task.Delay(idle, token).ContinueWith(_ =>
                     {
                         if (token.IsCancellationRequested) return;
-
-                        // Säkerhetsventil: om vi ändå fortsätter få små drip-chunkar, sätt ett hårt max-tak
-                        // Här kan du hålla reda på när burst startade och om elapsed > MaxIdle → commit ändå.
-                        // (enkel variant: kör commit direkt här)
-                        try
-                        {
-                            _burstScope?.Dispose();
-                        }
+                        try { Interlocked.Exchange(ref _burstScope, null)?.Dispose(); } // commit
                         finally
                         {
-                            _burstScope = null;
                             _burstActive = false;
                             _burstBytes = 0;
                             _burstChunks = 0;
@@ -408,9 +399,9 @@ namespace PT200Emulator.UI
                     }, TaskScheduler.Default);
                 };
 
-                // 5. Anslut transporten sist
+                // 8) Anslut sist
                 await _transport.ConnectAsync(host, port, CancellationToken.None);
-
+                await _telnetSessionBridge.SendFromClient(new byte[] { 0x0D, 0x0A }); // CRLF
                 TerminalReady = true;
             }
             catch (Exception ex)
@@ -424,8 +415,6 @@ namespace PT200Emulator.UI
             Dispatcher.Invoke(UpdateButtonStates);
         }
 
-
-
         private void UpdateButtonStates()
         {
             ConnectButton.IsEnabled = !TerminalReady;
@@ -434,11 +423,12 @@ namespace PT200Emulator.UI
 
         private void LogLevelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (LogLevelCombo.SelectedItem is ComboBoxItem cbi &&
-                Enum.TryParse<LogLevel>(cbi.Content?.ToString(), out var level))
-            {
-                LoggerFactoryProvider.SetMinimumLevel(level);
-            }
+            if (_uiConfig == null || LogLevelCombo.SelectedItem == null) return;
+
+            _uiConfig.DefaultLogLevel = (LogLevel)LogLevelCombo.SelectedItem;
+            LoggerFactoryProvider.SetMinimumLevel(_uiConfig.DefaultLogLevel);
+            _configService.SaveUiConfig(_uiConfig);
+            Terminal.FocusInput();
         }
 
         private void ScreenFormatCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -452,14 +442,16 @@ namespace PT200Emulator.UI
 
                 MainWindowControl.Width = state.Cols * 8 + 40;
                 MainWindowControl.Height = state.Rows * 18 + 60;
-
             }
+            Terminal.FocusInput();
         }
 
         protected override void OnClosed(EventArgs e)
         {
             this.LogInformation("Programmet avslutas normalt.");
             base.OnClosed(e);
+            _configService.SaveTransportConfig(cfg);
+            _configService.SaveUiConfig(_uiConfig);
             FreeConsole(); // stäng konsolfönstret
         }
 
@@ -573,6 +565,25 @@ namespace PT200Emulator.UI
 
             // Små chunkar under skrivning → kort fönster
             return SmallIdle;
+        }
+
+        private void LoadUiConfig()
+        {
+            this.LogDebug($"[LOADUICONFIG] Jobbar med TerminalState hashcode {state.GetHashCode()}");
+            // Ladda UI-konfig
+            _uiConfig = _configService.LoadUiConfig();
+
+            // 1. Loggnivå
+            LoggerFactoryProvider.SetMinimumLevel(_uiConfig.DefaultLogLevel);
+            LogLevelCombo.SelectedItem = _uiConfig.DefaultLogLevel;
+
+            // 2. Skärmformat
+            state.screenFormat = _uiConfig.ScreenFormat;
+            Terminal.AdjustTerminalWidth(state.ScreenBuffer);
+            Terminal.AdjustTerminalHeight(state.ScreenBuffer);
+
+            // 3. Färgtema
+            state.Display = _uiConfig.DisplayTheme;
         }
     }
 

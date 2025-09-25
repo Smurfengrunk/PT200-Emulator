@@ -1,4 +1,6 @@
-﻿namespace PT200Emulator.Core.Emulator
+﻿using static PT200Emulator.Core.Emulator.ScreenBuffer;
+
+namespace PT200Emulator.Core.Emulator
 {
     public interface IScreenBuffer
     {
@@ -36,7 +38,15 @@
         public bool GetDirty();
         public void MarkDirty();
         public void ClearDirty();
-
+        public StyleInfo CurrentStyle { get; set; }
+        public void SetScrollRegion(int top, int bottom);
+        public void ResetScrollRegion();
+        public bool InSystemLine();
+        public RowLockManager RowLocks { get; }
+        ScreenCell this[int row, int col] { get; set; }
+        ScreenCell GetCell(int row, int col);
+        void SetCell(int row, int col, ScreenCell cell);
+        void SetStyle(int row, int col,  StyleInfo style);
 
         // Optional: full buffer resize (if you need it later)
         // void Resize(int rows, int cols);

@@ -1,11 +1,14 @@
 ﻿#nullable disable
 
 using Microsoft.Extensions.Logging;
+using PT200Emulator.Core.Config;
 using PT200Emulator.Core.Emulator;
 using PT200Emulator.Core.Input;
 using PT200Emulator.Core.Parser;
 using PT200Emulator.Infrastructure.Logging;
 using System;
+using System.Configuration;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Windows;
@@ -16,6 +19,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Windows.Storage.Streams;
+using static PT200Emulator.Core.Config.UiConfig;
 
 namespace PT200Emulator.UI
 {
@@ -25,12 +29,13 @@ namespace PT200Emulator.UI
         private readonly DispatcherTimer _speedTimer;
         private int _bytesReceivedThisSecond = 0;
         private Run[,] _runs;
+        private UiConfig _uiConfig;
 
         public InputController InputController { get; set; } = default!;
         public IInputMapper InputMapper { get; set; }
 
-        private Brush _monoForeground = Brushes.LimeGreen;
-        private Brush _monoBackground = Brushes.Black;
+        private Brush foreGround = Brushes.LimeGreen;
+        private Brush backGround = Brushes.Black;
 
         private DateTime _lastRender = DateTime.MinValue;
         private readonly TimeSpan _renderInterval = TimeSpan.FromMilliseconds(50); // ~20 FPS
@@ -42,9 +47,13 @@ namespace PT200Emulator.UI
         internal IScreenBuffer _attachedBuffer;
         private DispatcherTimer _caretBlinkTimer;
         private bool _caretVisibleState = true;
+        public bool ManualInputEnabled = true;
+        public bool ManualInputDisabled = false;
 
-        private string _savedStatusText;
-        private bool _inSystemLine = false;
+        //private string _savedStatusText;
+        //private bool _inSystemLine = false;
+
+        private double _cellHeight, _cellWidth;
 
         public TerminalControl()
         {
@@ -75,8 +84,9 @@ namespace PT200Emulator.UI
             InputMapper = mapper;
         }
 
-        public async Task InitializeSession(TerminalSession session)
+        public async Task InitializeSession(TerminalSession session, UiConfig config)
         {
+            _uiConfig = config;
             // Nu byter vi till den nya*/
             _session = session ?? throw new ArgumentNullException(nameof(session));
             //_state = _session._state;
@@ -95,7 +105,7 @@ namespace PT200Emulator.UI
             _layoutReady = true;
 
             SafeRender();
-            _session.ScreenBuffer.CursorMoved += (row, col) => UpdateCaretPosition(row, col);
+            _session.ScreenBuffer.CursorMoved += (row, col) => UpdateCaretPosition(row, col, 'W', TerminalText.Foreground);
             StartCaretBlink();
 
             // Viktigt: initiera sessionens interna eventkopplingar (bl.a. DCS-svar)
@@ -126,6 +136,19 @@ namespace PT200Emulator.UI
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
         {
+            TerminalText.Document.Foreground = Brushes.LimeGreen;
+            TerminalText.Document.Background = Brushes.Black;
+            TextOptions.SetTextRenderingMode(TerminalText, TextRenderingMode.Aliased);
+            TextOptions.SetTextFormattingMode(TerminalText, TextFormattingMode.Display);
+            foreach (var block in TerminalText.Document.Blocks)
+            {
+                if (block is Paragraph p)
+                {
+                    p.Foreground = Brushes.LimeGreen;
+                    p.Background = Brushes.Black;
+                }
+            }
+
             if (_session != null)
             {
                 FocusInput();
@@ -135,6 +158,7 @@ namespace PT200Emulator.UI
                 this.LogTrace("[USERCONTROL_LOADED] Session initialized");
             }
             else this.LogDebug("[USERCONTROL_LOADED] Session not initialized");
+            TerminalText.InvalidateVisual();
         }
 
         public void FocusInput()
@@ -145,47 +169,31 @@ namespace PT200Emulator.UI
 
         private async void InputOverlay_PreviewKeyDown(object sender, KeyEventArgs e)
         {
-            if (await InputController.DetectSpecialKey(e))
+            if (ManualInputEnabled)
             {
-                e.Handled = true;
-                return;
-            }
-
-            if ((Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.P) || e.Key == Key.Pause)
-            {
-                await InputController?.SendBreakAsync();
-                e.Handled = true;
-                RenderFromBuffer(_state.ScreenBuffer, false);
-                return;
-            }
-
-            switch (e.Key)
-            {
-                case Key.Back:
-                    InputController?.SendRawAsync(new byte[] { 0x08 }); // BS
+                if (await InputController.DetectSpecialKey(e))
+                {
                     e.Handled = true;
                     return;
+                }
 
-                case Key.Enter:
-                    InputController?.SendRawAsync(new byte[] { 0x0D, 0x0A }); // CRLF
+                // Låt InputMapper göra jobbet
+                var bytes = InputMapper.MapKey(e.Key, Keyboard.Modifiers);
+
+                if (bytes != null)
+                {
+                    // Specialfall för backspace i Prime-läge
+                    if (e.Key == Key.Back)
+                        bytes = new byte[] { 0x08, 0x20, 0x08 };
+
+                    await InputController.SendRawAsync(bytes);
                     e.Handled = true;
                     return;
+                }
 
-                case Key.Space:
-                    InputController?.SendRawAsync(new byte[] { 0x20 }); // Space
-                    e.Handled = true;
-                    return;
-
-                case Key.Tab:
-                    InputController?.SendRawAsync(new byte[] { 0x09 }); // Tab
-                    e.Handled = true;
-                    return;
-
-                case Key.NumLock:
-                case Key.CapsLock:
-                case Key.Scroll:
+                // Hantera låsindikatorer separat
+                if (e.Key == Key.NumLock || e.Key == Key.CapsLock || e.Key == Key.Scroll)
                     UpdateLockIndicators();
-                    break;
             }
         }
 
@@ -224,21 +232,19 @@ namespace PT200Emulator.UI
                 Brushes.White,
                 pixelsPerDip // <-- rätt DPI här
             );
-            double charHeight = ft.Height;
-            double charWidth = ft.WidthIncludingTrailingWhitespace;
-            double extra = TerminalText.Padding.Left + TerminalText.Padding.Right
-                         + TerminalText.BorderThickness.Left + TerminalText.BorderThickness.Right;
+            InitCellMetrics();
+            //double extra = TerminalText.Padding.Left + TerminalText.Padding.Right
+            //             + TerminalText.BorderThickness.Left + TerminalText.BorderThickness.Right;
 
-            double totalWidth = (charWidth * buffer.Cols)/* + extra*/;
+            double totalWidth = (_cellWidth * buffer.Cols)/* + extra*/;
 
             var doc = new FlowDocument
             {
                 PagePadding = new Thickness(0),
                 TextAlignment = TextAlignment.Left,
-                LineHeight = charHeight,
+                LineHeight = _cellHeight,
                 LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
                 PageWidth = totalWidth
-                // Ingen ColumnWidth här
             };
 
             TerminalText.IsUndoEnabled = false;
@@ -256,15 +262,15 @@ namespace PT200Emulator.UI
                 {
                     Margin = new Thickness(0),
                     Padding = new Thickness(0),
-                    LineHeight = charHeight,
+                    LineHeight = _cellHeight,
                     LineStackingStrategy = LineStackingStrategy.BlockLineHeight
                 };
                 for (int c = 0; c < buffer.Cols; c++)
                 {
                     var run = new Run(" ")
                     {
-                        Foreground = _monoForeground,
-                        Background = _monoBackground
+                        Foreground = Foreground,
+                        Background = Background
                     };
                     _runs[r, c] = run;
                     p.Inlines.Add(run);
@@ -274,7 +280,7 @@ namespace PT200Emulator.UI
 
             TerminalText.Document = doc;
             TerminalText.Width = totalWidth; // valfritt, om du vill låsa bredden
-            TerminalText.Height = buffer.Rows * charHeight;
+            TerminalText.Height = buffer.Rows * _cellHeight;
             TerminalText.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
         }
 
@@ -283,22 +289,35 @@ namespace PT200Emulator.UI
             var run = (_runs != null) ? _runs[row, col] : throw new ArgumentNullException("_runs null");
             run.Text = ch.ToString();
 
-            if (fullColor)
+            if (fullColor && style != null)
             {
                 run.Foreground = new SolidColorBrush(ConvertConsoleColor(style.Foreground));
                 run.Background = new SolidColorBrush(ConvertConsoleColor(style.Background));
             }
+            else if (style != null)
+            {
+                run.Foreground = new SolidColorBrush(ConvertConsoleColor(_state.ScreenBuffer.CurrentStyle.Foreground));
+                run.Background = new SolidColorBrush(ConvertConsoleColor(_state.ScreenBuffer.CurrentStyle.Background));
+            }
             else
             {
-                run.Foreground = _monoForeground;
-                run.Background = _monoBackground;
+                this.LogError($"[UPDATECELL] style is null for cell at {row} {col}");
+                return;
             }
 
-            if (style != null) run.FontWeight = style.Bold ? FontWeights.Bold : FontWeights.Normal;
-            else this.LogError($"[UPDATECELL] style is null for cell at {row} {col}");
+            run.FontWeight = style?.Bold == true ? FontWeights.Bold : FontWeights.Normal;
+            if (row == 0 && col == 0)
+            {
+                run.Foreground = Brushes.White;
+                run.Background = Brushes.Black;
+                run.FontWeight = FontWeights.Bold;
+                TextOptions.SetTextFormattingMode(run, TextFormattingMode.Display);
+            }
+
+            //this.LogDebug($"UpdateCell: Pos=({row},{col}), FG={style.Foreground}, BG={style.Background}, LowIntensity={style.LowIntensity}");
         }
 
-        public void RenderFromBuffer(IScreenBuffer buffer, bool fullColor = false)
+        public void RenderFromBuffer(IScreenBuffer buffer, bool fullColor = true)
         {
             //this.LogTrace($"[RENDERFROMBUFFER] Start of RenderFromBuffer, Dirty flag: {buffer.GetDirty()}");
             try
@@ -330,7 +349,7 @@ namespace PT200Emulator.UI
                     }
                 }
 
-                UpdateCaretPosition(buffer.CursorRow, buffer.CursorCol);
+                UpdateCaretPosition(buffer.CursorRow, buffer.CursorCol, 'W', TerminalText.Foreground);
                 _lastRender = DateTime.UtcNow;
                 FocusInput();
                 this.LogTrace($"[RENDERFROMBUFFER] End of RenderBuffer, Dirty flag: {buffer.GetDirty()}");
@@ -374,32 +393,29 @@ namespace PT200Emulator.UI
         {
             switch (theme)
             {
-                case TerminalState.DisplayType.White:
-                    _monoForeground = Brushes.White;
-                    _monoBackground = Brushes.Black;
-                    break;
                 case TerminalState.DisplayType.Green:
-                    _monoForeground = Brushes.LimeGreen;
-                    _monoBackground = Brushes.Black;
+                    foreGround = Brushes.LimeGreen;
+                    backGround = Brushes.Black;
                     break;
                 case TerminalState.DisplayType.Blue:
-                    _monoForeground = Brushes.DeepSkyBlue;
-                    _monoBackground = Brushes.Black;
+                    foreGround = Brushes.DeepSkyBlue;
+                    backGround = Brushes.Black;
                     break;
                 case TerminalState.DisplayType.Amber:
-                    _monoForeground = new SolidColorBrush(Color.FromRgb(255, 191, 0));
-                    _monoBackground = Brushes.Black;
+                    foreGround = new SolidColorBrush(Color.FromRgb(255, 191, 0));
+                    backGround = Brushes.Black;
                     break;
+                case TerminalState.DisplayType.White:
                 case TerminalState.DisplayType.FullColor:
                 default:
-                    _monoForeground = Brushes.White;
-                    _monoBackground = Brushes.Black;
+                    foreGround = Brushes.White;
+                    backGround = Brushes.Black;
                     break;
             }
 
             // Ny text
-            TerminalText.Background = _monoBackground;
-            TerminalText.Foreground = _monoForeground;
+            TerminalText.Background = backGround;
+            TerminalText.Foreground = foreGround;
 
             // Befintlig text
             foreach (var block in TerminalText.Document.Blocks)
@@ -410,16 +426,39 @@ namespace PT200Emulator.UI
                     {
                         if (inline is Run r)
                         {
-                            r.Foreground = _monoForeground;
-                            r.Background = _monoBackground;
+                            r.Foreground = foreGround;
+                            r.Background = backGround;
                         }
                     }
                 }
             }
 
             // Statusrad
-            StatusBarElement.Foreground = _monoBackground;
-            StatusBarElement.Background = _monoForeground;
+            StatusBarElement.Foreground = backGround;
+            StatusBarElement.Background = foreGround;
+
+            // Uppdatera även ScreenBuffer om du har tillgång till den
+            if (_state.ScreenBuffer != null)
+            {
+                _state.ScreenBuffer.CurrentStyle.Foreground = ConsoleColor.Green;
+                _state.ScreenBuffer.CurrentStyle.Background = ConsoleColor.Black;
+
+                for (int r = 0; r < _state.ScreenBuffer.Rows; r++)
+                    for (int c = 0; c < _state.ScreenBuffer.Cols; c++)
+                    {
+                        var cell = _state.ScreenBuffer[r, c];
+                        if (cell.Style != null)
+                        {
+                            cell.Style.LowIntensity = false;
+                            cell.Foreground = foreGround;
+                            cell.Background = backGround;
+                        }
+                    }
+
+
+                _state.ScreenBuffer.MarkDirty(); // trigga redraw
+            }
+            this.LogStackTrace();
         }
 
         private void OnBufferUpdated()
@@ -556,7 +595,7 @@ namespace PT200Emulator.UI
             state.ScreenBuffer.MarkDirty();
 
             _layoutReady = true;
-            UpdateCaretPosition(Math.Min(state.ScreenBuffer.CursorCol, state.Cols - 1), Math.Min(state.ScreenBuffer.CursorRow, state.Rows - 1));
+            UpdateCaretPosition(Math.Min(state.ScreenBuffer.CursorCol, state.Cols - 1), Math.Min(state.ScreenBuffer.CursorRow, state.Rows - 1), 'W', TerminalText.Foreground);
         }
         private void SafeRender()
         {
@@ -628,31 +667,80 @@ namespace PT200Emulator.UI
             }
         }
 
-        private void UpdateCaretPosition(int row, int col)
+        private void UpdateCaretPosition(int row, int col, char ch, Brush foreground)
         {
-            double charWidth = GetCharWidth(TerminalText);
-            double charHeight = TerminalText.Document.LineHeight; // radavstånd
+            double baseX = col * _cellWidth + GetGlyphWidth('0');
+            double baseY = row * _cellHeight;
+            double glyphWidth = GetGlyphWidth(ch);
 
-            // Justering inom cellen
-            double xOffset = col * charWidth;
-            double yOffset = row * charHeight + (charHeight - CaretVisual.Height);
+            double caretWidth;
+            double caretHeight;
+            double caretX = baseX;
+            double caretY = baseY;
 
-            CaretVisual.Margin = new Thickness(xOffset, yOffset, 0, 0);
+            if (_uiConfig == null) return;
+
+            switch (_uiConfig.CaretStylePreference)
+            {
+                case CaretStyle.VerticalBar:
+                    caretWidth = Math.Max(1, _cellWidth * 0.1);
+                    caretHeight = _cellHeight;
+                    caretX = baseX + Math.Min(glyphWidth, _cellWidth - caretWidth);
+                    break;
+
+                case CaretStyle.Underscore:
+                    caretWidth = _cellWidth;
+                    caretHeight = Math.Max(1, _cellHeight * 0.1);
+                    caretY = baseY + _cellHeight - caretHeight;
+                    caretX = baseX + caretWidth - 1;
+                    break;
+
+                case CaretStyle.Block:
+                    caretWidth = _cellWidth;
+                    caretHeight = _cellHeight;
+                    break;
+
+                default:
+                    caretWidth = Math.Max(1, _cellWidth * 0.1);
+                    caretHeight = _cellHeight;
+                    break;
+            }
+
+            CaretVisual.Margin = new Thickness(caretX, caretY, 0, 0);
+            CaretVisual.Width = caretWidth;
+            CaretVisual.Height = caretHeight;
+            CaretVisual.Fill = foreground;
             CaretVisual.Visibility = Visibility.Visible;
         }
 
-        private double GetCharWidth(RichTextBox rtb)
+        // 1) Mät cellbredd en gång
+        private void InitCellMetrics()
         {
-            var formattedText = new FormattedText(
-                "W",
-                CultureInfo.CurrentCulture,
+            var pixelsPerDip = VisualTreeHelper.GetDpi(TerminalText).PixelsPerDip;
+            var typeface = new Typeface(
+                TerminalText.FontFamily,
+                TerminalText.FontStyle,
+                TerminalText.FontWeight,
+                TerminalText.FontStretch
+            );
+
+            var ft = new FormattedText(
+                "W", // referenstecken
+                CultureInfo.InvariantCulture,
                 FlowDirection.LeftToRight,
-                new Typeface(rtb.FontFamily, rtb.FontStyle, rtb.FontWeight, rtb.FontStretch),
-                rtb.FontSize,
-                Brushes.Black,
-                new NumberSubstitution(),
-                1);
-            return formattedText.WidthIncludingTrailingWhitespace;
+                typeface,
+                TerminalText.FontSize,
+                Brushes.Transparent,
+                pixelsPerDip
+            );
+
+            _cellWidth = ft.WidthIncludingTrailingWhitespace;
+            _cellHeight = ft.Height;
+        }
+
+        private double GetGlyphWidth(char ch)
+        {
+            return _cellWidth;
         }
 
         private void StartCaretBlink()

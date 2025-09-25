@@ -4,9 +4,11 @@ using PT200Emulator.Core.Input;
 using PT200Emulator.Core.Parser;
 using PT200Emulator.DummyImplementations;
 using PT200Emulator.Infrastructure.Logging;
+using PT200Emulator.UI;
 using System;
 using System.IO; // Viktigt för Path
 using System.Text;
+using System.Text.Json;
 
 namespace PT200Emulator.Core.Parser
 {
@@ -17,13 +19,13 @@ namespace PT200Emulator.Core.Parser
         private readonly PercentHandler percentHandler;
         private readonly OscHandler oscHandler;
         private readonly DollarCommandHandler dollarCommandHandler = new();
-        public readonly DcsSequenceHandler dcsHandler;
         public IScreenBuffer screenBuffer {  get; private set; }
         private List<byte> dcsBuffer = new();
         private readonly TerminalState termState;
-        private readonly CsiSequenceHandler _csiHandler;
         private List<byte> _csiBuffer = new();
-
+        public DcsSequenceHandler _dcsHandler {  get; private set; }
+        public CsiSequenceHandler _csiHandler { get; private set; }
+        public VisualAttributeManager visualAttributeManager { get; private set; }
 
         public event Action<IReadOnlyList<TerminalAction>> ActionsReady;
         public event Action<byte[]> OnDcsResponse;
@@ -43,6 +45,7 @@ namespace PT200Emulator.Core.Parser
         private ParseState state = ParseState.Normal;
         private readonly StringBuilder seqBuffer = new();
         private readonly InputController _controller;
+        private readonly Dictionary<string, CsiCommandDefinition> _definitions;
 
         // Dummy för att undvika idiotiska varningar
         private void SuppressEventWarnings()
@@ -50,31 +53,47 @@ namespace PT200Emulator.Core.Parser
             _ = OnDcsResponse;
             _ = ActionsReady;
         }
-        public TerminalParser(IDataPathProvider paths, TerminalState state, InputController controller)
+        public TerminalParser(IDataPathProvider paths, TerminalState state, InputController controller, ModeManager modeManager, TerminalControl terminal)
         {
             this.LogDebug($"[TERMINALPARSER] Startar ny Parser-instans med hash code {this.GetHashCode()}");
             var g0Path = Path.Combine(paths.CharTablesPath, "G0.json");
             var g1Path = Path.Combine(paths.CharTablesPath, "G1.json");
 
-            charTables = new CharTableManager(g0Path, g1Path);
-            escHandler = new EscapeSequenceHandler(charTables);
-            _csiHandler = new CsiSequenceHandler(new CsiCommandTable(Path.Combine(paths.BasePath, "Data", "CsiCommands.json")));
-            dcsHandler = new DcsSequenceHandler(state, (Path.Combine(paths.BasePath, "Data", "DcsBitGroups.json")));
-            percentHandler = new PercentHandler();
-            oscHandler = new OscHandler();
+            var json = File.ReadAllText(Path.Combine(paths.BasePath, "data", "CsiCommands.json"));
+            var root = JsonSerializer.Deserialize<CsiCommandRoot>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (root?.CSI == null)
+                throw new InvalidOperationException("Kunde inte läsa in CSI-kommandon från JSON.");
+
+            var definitions = root.CSI;
+            _definitions = definitions.ToDictionary(
+                d => $"{d.Command}:{d.Params}",
+                d => d,
+                StringComparer.Ordinal
+            );
             this.termState = state ?? throw new ArgumentNullException(nameof(state));
             screenBuffer = state.ScreenBuffer;
             _controller = controller;
-            dcsHandler.OnDcsResponse += bytes =>
+            visualAttributeManager = new VisualAttributeManager();
+
+            charTables = new CharTableManager(g0Path, g1Path);
+            escHandler = new EscapeSequenceHandler(charTables, screenBuffer, terminal, termState);
+            
+            _csiHandler = new CsiSequenceHandler(new CsiCommandTable(definitions, modeManager, visualAttributeManager, screenBuffer, termState), modeManager);
+            _dcsHandler = new DcsSequenceHandler(state, (Path.Combine(paths.BasePath, "Data", "DcsBitGroups.json")));
+            percentHandler = new PercentHandler();
+            oscHandler = new OscHandler();
+            _dcsHandler.OnDcsResponse += bytes =>
             {
-                this.LogTrace($"[PARSER] OnDcsResponse wired, handler hash={dcsHandler.GetHashCode()}");
+                this.LogTrace($"[PARSER] OnDcsResponse wired, handler hash={_dcsHandler.GetHashCode()}");
                 OnDcsResponse?.Invoke(bytes);
             };
         }
 
         private void SetState(ParseState newState)
         {
-            this.LogDebug($"[Parser] State → {newState}", LogLevel.Trace);
+            this.LogTrace($"[Parser] State → {newState}", LogLevel.Trace);
             state = newState;
         }
 
@@ -91,13 +110,14 @@ namespace PT200Emulator.Core.Parser
         public void Feed(byte[] data) => Feed(data.AsSpan());
         public void Feed(ReadOnlySpan<byte> data)
         {
+            string s_data = Encoding.UTF8.GetString(data);
+            this.LogTrace($"Feed: {s_data}");
             using (screenBuffer.BeginUpdate())
             {
                 this.LogTrace($"[TerminalParser.Feed] Feeding {data.Length} bytes");
                 for (int i = 0; i < data.Length; i++)
                 {
                     byte b = data[i];
-
                     switch (state)
                     {
                         case ParseState.Normal:
@@ -118,11 +138,12 @@ namespace PT200Emulator.Core.Parser
                             break;
 
                         case ParseState.Escape:
+                            this.LogTrace($"[Feed] Escape {(char)b} detekterat");
                             if (b == '[')
                             {
                                 state = ParseState.CSI;
                                 seqBuffer.Clear();
-                                seqBuffer.Append((char)b);
+                                //seqBuffer.Append((char)b);
                             }
                             else if (b == ']')
                             {
@@ -135,6 +156,19 @@ namespace PT200Emulator.Core.Parser
                                 state = ParseState.DCS;
                                 seqBuffer.Clear();
                             }
+                            else if (b == '$')
+                            {
+                                this.LogTrace($"[Feed Esc] Escape {(char)b} detekterat");
+                                state = ParseState.EscDollar;
+                                //seqBuffer.Clear();
+                                seqBuffer.Append((char)b);
+                            }
+                            else if(b == '0')
+                            {
+                                this.LogTrace($"[Feed Esc] Escape {(char)b} detekterat");
+                                state = ParseState.Esc0;
+                                seqBuffer.Append((char)b);
+                            }
                             else
                             {
                                 seqBuffer.Append((char)b);
@@ -144,10 +178,11 @@ namespace PT200Emulator.Core.Parser
                             break;
 
                         case ParseState.CSI:
+                            this.LogTrace($"[Feed] CSI {(char)b} detekterat");
                             seqBuffer.Append((char)b);
                             if (b >= 0x40 && b <= 0x7E)
                             {
-                                HandleCsi(seqBuffer.ToString());
+                                HandleCsi((char)b, seqBuffer.ToString());
                                 seqBuffer.Clear();
                                 state = ParseState.Normal;
                             }
@@ -164,6 +199,7 @@ namespace PT200Emulator.Core.Parser
                             break;
 
                         case ParseState.DCS:
+                            this.LogTrace($"[Feed] DCS {(char)b} detekterat");
                             // Leta efter ESC \
                             if (b == 0x1B && i + 1 < data.Length && data[i + 1] == 0x5C)
                             {
@@ -178,6 +214,32 @@ namespace PT200Emulator.Core.Parser
                                 seqBuffer.Append((char)b);
                             }
                             break;
+                        case ParseState.EscDollar:
+                            seqBuffer.Append((char)b);
+                            this.LogTrace($"[Feed EscDollar] Escape {seqBuffer} detekterat");
+
+                            // Om du vet att ESC $ alltid följs av exakt 1 byte (t.ex. "ESC $ 0")
+                            // kan du trigga direkt:
+                            if (seqBuffer.Length == 2)
+                            {
+                                HandleEscOther(seqBuffer.ToString());
+                                seqBuffer.Clear();
+                                state = ParseState.Normal;
+                            }
+                            break;
+                        case ParseState.Esc0:
+                            seqBuffer.Append((char)b);
+                            this.LogTrace($"[Feed Esc0] Escape {seqBuffer} detekterat");
+
+                            // Om du vet att ESC $ alltid följs av exakt 1 byte (t.ex. "ESC $ 0")
+                            // kan du trigga direkt:
+                            if (seqBuffer.Length == 3)
+                            {
+                                HandleEscOther(seqBuffer.ToString());
+                                seqBuffer.Clear();
+                                state = ParseState.Normal;
+                            }
+                            break;
                     }
                 }
             }
@@ -186,7 +248,7 @@ namespace PT200Emulator.Core.Parser
         public void Parse(string sequence)
         {
             if (sequence.StartsWith("\x1B["))
-                HandleCsi(sequence);
+                HandleCsi((char)sequence[^1], sequence);
             else if (sequence.StartsWith("\x1B]"))
                 HandleOsc(sequence);
             else if (sequence.StartsWith("\x1B$"))
@@ -194,7 +256,7 @@ namespace PT200Emulator.Core.Parser
             else if (sequence.StartsWith("\x1B%"))
                 HandleEncoding(sequence);
             else if (sequence.StartsWith("\x1BP"))
-                dcsHandler.Handle(Encoding.ASCII.GetBytes(sequence), _controller);
+                _dcsHandler.Handle(Encoding.ASCII.GetBytes(sequence), _controller);
             else
                 HandleSingleEsc(sequence);
         }
@@ -202,9 +264,9 @@ namespace PT200Emulator.Core.Parser
         private void HandleSingleEsc(string sequence) => escHandler.Handle(sequence);
         private void HandleOsc(string sequence) => oscHandler.Handle(sequence);
         private void HandleEncoding(string sequence) => percentHandler.Handle(sequence);
-        private void HandleCsi(string sequence) => _csiHandler.Handle(sequence, termState, screenBuffer);
+        private void HandleCsi(char finalChar, string sequence) => _csiHandler.Handle(finalChar, sequence, termState, screenBuffer, visualAttributeManager);
         private void HandleCharset(string sequence) => escHandler.Handle(sequence);
-        private void HandleDcs(string sequence) => dcsHandler.Handle(Encoding.ASCII.GetBytes(sequence), _controller);
+        private void HandleDcs(string sequence) => _dcsHandler.Handle(Encoding.ASCII.GetBytes(sequence), _controller);
 
         private void HandleEscPercent(char ch)
           {

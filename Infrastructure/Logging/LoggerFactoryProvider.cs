@@ -16,25 +16,14 @@ namespace PT200Emulator.Infrastructure.Logging
             var factory = LoggerFactory.Create(builder =>
             {
                 builder.AddProvider(new CountingLoggerProvider()); // först!
-                builder.AddSimpleConsole(o =>
-                {
-                    o.IncludeScopes = true;
-                    o.TimestampFormat = "[HH:mm:ss] ";
-                    o.SingleLine = true;
-                });
-                builder.AddDebug();
+                //builder.AddProvider(new ColorConsoleLoggerProvider()); // vår färgade konsol
+                builder.AddDebug(); // VS Debug Output
                 builder.AddFilter((category, level) => level >= _currentLevel);
             });
 
-            // Förlogga direkt – CountingLoggerProvider är redan aktiv
-            var preLogger = factory.CreateLogger("Startup");
-            for (int i = 0; i < 7; i++)
-            {
-                preLogger.LogInformation($"Förlogg {i + 1} – initierar loggsystem");
-            }
-
             return factory;
         }
+
 
         public static void SetMinimumLevel(LogLevel level)
         {

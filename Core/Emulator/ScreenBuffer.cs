@@ -1,5 +1,9 @@
-﻿using PT200Emulator.Infrastructure.Logging;
+﻿using Microsoft.Extensions.Logging;
+using Microsoft.VisualStudio.TestPlatform.ObjectModel.Client;
+using PT200Emulator.Core.Parser;
+using PT200Emulator.Infrastructure.Logging;
 using PT200Emulator.UI;
+using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Media;
@@ -10,35 +14,43 @@ namespace PT200Emulator.Core.Emulator
 {
     public class ScreenBuffer : IScreenBuffer
     {
+        private const int TabSize = 8;
+
         private char[,] _chars;
         private StyleInfo[,] _styles;
 
         public event Action BufferUpdated;
         public event Action<int, int> CursorMoved;
+        internal int _updateDepth;
+        private bool _dirty;
+        private bool _hasFlushed = false;
+        private bool _inSystemLine = false;
+        private CancellationTokenSource _idleCts;
+        private readonly TimeSpan _idleDelay = TimeSpan.FromMilliseconds(8);
+        private readonly CharTableManager charTableManager;
+        private readonly TextLogger textLogger;
+        private FlushTrigger flushTrigger;
+        public int Rows => _chars.GetLength(0);
+        public int Cols => _chars.GetLength(1);
+        private int ScrollTop, ScrollBottom;
+        public int CursorRow { get; private set; }
+        public int CursorCol { get; private set; }
+        public RowLockManager RowLocks { get; } = new();
+
+        public StyleInfo CurrentStyle { get; set; } = new StyleInfo();
+        private CancellationTokenSource _burstCts;
+        private IDisposable _burstScope;
+
+        public IDisposable BeginUpdate() => new UpdateScope(this);
+
+        private void EnterUpdate() => Interlocked.Increment(ref _updateDepth);
 
         public int GetBufferUpdatedHandlerCount()
         {
             return BufferUpdated?.GetInvocationList().Length ?? 0;
         }
 
-        public int Rows => _chars.GetLength(0);
-        public int Cols => _chars.GetLength(1);
 
-        public int CursorRow { get; private set; }
-        public int CursorCol { get; private set; }
-
-        public StyleInfo CurrentStyle { get; set; } = new StyleInfo();
-
-        private const int TabSize = 8;
-
-        internal int _updateDepth;
-        private bool _dirty;
-        private CancellationTokenSource _idleCts;
-        private readonly TimeSpan _idleDelay = TimeSpan.FromMilliseconds(8);
-
-        public IDisposable BeginUpdate() => new UpdateScope(this);
-
-        private void EnterUpdate() => Interlocked.Increment(ref _updateDepth);
 
         private readonly struct UpdateScope : IDisposable
         {
@@ -48,19 +60,30 @@ namespace PT200Emulator.Core.Emulator
         }
 
         // Fält
-        private CancellationTokenSource _burstCts;
-        private IDisposable _burstScope;
-        private bool _burstActive;
-
         public struct ScreenCell
         {
             public char Char;
             public Brush Foreground;
             public Brush Background;
+            public StyleInfo Style;
         }
         private readonly ScreenCell[,] _mainBuffer;
         private readonly ScreenCell[] _systemLineBuffer;
-        private bool _inSystemLine = false;
+        public ScreenCell this[int row, int col]
+        {
+            get => _mainBuffer[row, col];
+            set => _mainBuffer[row, col] = value;
+        }
+
+        public ScreenCell[,] AllCells()
+        {
+            return _mainBuffer;
+        }
+
+        public bool InSystemLine()
+        {
+            if (_inSystemLine) return true; else return false;
+        }
 
         public void MarkDirty()
         {
@@ -117,7 +140,7 @@ namespace PT200Emulator.Core.Emulator
             _burstScope?.Dispose();
             _burstScope = null;
 
-            _burstActive = false;
+            //_burstActive = false;
 
             _dirty = true;
         }
@@ -130,27 +153,39 @@ namespace PT200Emulator.Core.Emulator
 
             Task.Delay(_idleDelay, token).ContinueWith(_ =>
             {
+                this.LogTrace($"[SCHEDULEDIDLEFLUSH] BufferUpdated invoked – handlers: {BufferUpdated?.GetInvocationList().Length ?? 0}, hash: {this.GetHashCode()}");
                 if (!token.IsCancellationRequested && _dirty && _updateDepth == 0)
                 {
+                    this.LogTrace($"[SCHEDULEIDLEFLUSH] Dags för en uppdatering");
                     Application.Current.Dispatcher.Invoke(
                         () => BufferUpdated?.Invoke(),
                         DispatcherPriority.Render
                     );
                 }
             }, TaskScheduler.Default);
-        }
+            flushTrigger.ForceFlush("ScheduledIdFlush");
+            _hasFlushed = true;
+         }
 
-        public ScreenBuffer(int rows, int cols, Brush defaultFg, Brush defaultBg)
+        public ScreenBuffer(int rows, int cols, Brush defaultFg, Brush defaultBg, string basePath)
         {
             _mainBuffer = new ScreenCell[rows, cols];
             _systemLineBuffer = new ScreenCell[cols];
             if (rows <= 0 || cols <= 0) throw new ArgumentOutOfRangeException();
             _chars = new char[rows, cols];
             _styles = new StyleInfo[rows, cols];
+            var g0path = Path.Combine(basePath, "data", "chartables", "g0.json");
+            var g1path = Path.Combine(basePath, "data", "chartables", "g1.json");
+            charTableManager = new CharTableManager(g0path, g1path);
+            textLogger = new TextLogger(MainWindow.Logger);
+            flushTrigger = new FlushTrigger(textLogger);
             // Initiera med blanktecken och standardfärger
             for (int r = 0; r < rows; r++)
                 for (int c = 0; c < cols; c++)
-                    _mainBuffer[r, c] = new ScreenCell { Char = ' ', Foreground = defaultFg, Background = defaultBg };
+                {
+                    _mainBuffer[r, c] = new ScreenCell { Char = ' ', Foreground = defaultFg, Background = defaultBg, Style = new StyleInfo() };
+                    //this.LogDebug($"LowIntensity flag @({r}, {c}) = {_mainBuffer[r, c].Style.LowIntensity}");
+                }
 
             for (int c = 0; c < cols; c++)
                 _systemLineBuffer[c] = new ScreenCell { Char = ' ', Foreground = defaultFg, Background = defaultBg };
@@ -193,8 +228,6 @@ namespace PT200Emulator.Core.Emulator
                 CursorCol = Math.Min(CursorCol, cols - 1);
 
                 _dirty = true;
-
-                this.LogTrace($"[SCREENBUFFER] BufferUpdated invoked – handlers: {BufferUpdated?.GetInvocationList().Length ?? 0}, hash: {this.GetHashCode()}");
             });
         }
 
@@ -212,6 +245,12 @@ namespace PT200Emulator.Core.Emulator
 
         public void WriteChar(char ch)
         {
+            if (!_hasFlushed)
+                flushTrigger.ForceFlush("Första teckeninmatning – inittext börjar");
+            var glyph = charTableManager.Translate((byte)ch);
+            textLogger.LogChar(CursorRow, CursorCol, glyph);
+            //this.LogTrace($"[CHAR] Pos=({CursorRow},{CursorCol}), Byte=0x{(byte)ch:X2}, Glyph='{glyph}', Attr=FG:{CurrentStyle.brForeGround}, BG:{CurrentStyle.brBackGround}");
+            flushTrigger.OnCharWritten();
             Mutate(() =>
             {
                 if (ch == '\x1B') return; // ESC ska inte ritas
@@ -238,8 +277,8 @@ namespace PT200Emulator.Core.Emulator
                     _mainBuffer[CursorRow, CursorCol] = new ScreenCell
                     {
                         Char = ch,
-                        Foreground = CurrentStyle.brForeGround,
-                        Background = CurrentStyle.brBackGround
+                        Foreground = CurrentStyle.ReverseVideo ? CurrentStyle.brBackGround : CurrentStyle.brForeGround,
+                        Background = CurrentStyle.ReverseVideo ? CurrentStyle.brForeGround : CurrentStyle.brBackGround
                     };
 
                     _chars[CursorRow, CursorCol] = ch;
@@ -247,8 +286,6 @@ namespace PT200Emulator.Core.Emulator
 
                     AdvanceCursor();
                 }
-
-                this.LogTrace($"[WriteChar] BufferUpdated fired from ScreenWriter {this.GetHashCode()}");
             });
         }
 
@@ -260,6 +297,12 @@ namespace PT200Emulator.Core.Emulator
             CursorCol = Math.Clamp(col, 0, Cols - 1);
             CursorMoved?.Invoke(CursorRow, CursorCol);
             MarkDirty();
+            if (!_hasFlushed && row == 22 && col == 0)
+            {
+                flushTrigger.ForceFlush("Initsekvens avslutad");
+                _hasFlushed = true;
+            }
+            else flushTrigger.OnCursorMoved(CursorRow, CursorCol);
         }
 
         public void CarriageReturn()
@@ -306,7 +349,6 @@ namespace PT200Emulator.Core.Emulator
 
             CursorRow = 0;
             CursorCol = 0;
-            this.LogTrace("[ClearScreen] BufferUpdated fired");
             MarkDirty();
         }
 
@@ -318,7 +360,6 @@ namespace PT200Emulator.Core.Emulator
                 _chars[row, c] = ' ';
                 _styles[row, c] = new StyleInfo();
             }
-            this.LogTrace("[ClearLine] BufferUpdated fired");
             MarkDirty();
         }
 
@@ -354,19 +395,57 @@ namespace PT200Emulator.Core.Emulator
                 _chars[Rows - 1, c] = ' ';
                 _styles[Rows - 1, c] = new StyleInfo();
             }
-            this.LogTrace("[ScrollUp] BufferUpdated fired");
             MarkDirty();
+        }
+
+        public void SetScrollRegion(int top, int bottom)
+        {
+            // Sätt övre och nedre gräns för scrollområdet
+            ScrollTop = top;
+            ScrollBottom = bottom;
+            // Validera att top < bottom och inom skärmens höjd
+        }
+
+        public void ResetScrollRegion()
+        {
+            ScrollTop = 0;
+            ScrollBottom = Rows -1;
+        }
+
+        public ScreenCell GetCell(int row, int col)
+        {
+            return _mainBuffer[row, col];
+        }
+
+        public void SetCell(int row, int col, ScreenCell cell)
+        {
+            _mainBuffer[row, col] = cell;
+        }
+
+        public void SetStyle(int row, int col,  StyleInfo style)
+        {
+            _styles[row, col] = style;
         }
     }
 
     public class StyleInfo
     {
-        public ConsoleColor Foreground { get; set; } = ConsoleColor.Gray;
+        public ConsoleColor Foreground { get; set; } = ConsoleColor.Green;
         public ConsoleColor Background { get; set; } = ConsoleColor.Black;
+
         public Brush brForeGround => ConsoleColorToBrush(Foreground);
         public Brush brBackGround => ConsoleColorToBrush(Background);
+
         public bool Blink { get; set; } = false;
         public bool Bold { get; set; } = false;
+        public bool Underline { get; set; } = false;
+        public bool ReverseVideo { get; set; } = false;
+        public bool LowIntensity { get; set; } = false;
+        public bool StrikeThrough { get; set; } = false;
+
+        // PT200-specifika
+        public bool Transparent { get; set; } = false;
+        public bool VisualAttributeLock { get; set; } = false;
 
         public void Reset()
         {
@@ -374,17 +453,16 @@ namespace PT200Emulator.Core.Emulator
             Background = ConsoleColor.Black;
             Blink = false;
             Bold = false;
+            Underline = false;
+            ReverseVideo = false;
+            LowIntensity = false;
+            Transparent = false;
+            VisualAttributeLock = false;
         }
 
         public StyleInfo Clone()
         {
-            return new StyleInfo
-            {
-                Foreground = this.Foreground,
-                Background = this.Background,
-                Blink = this.Blink,
-                Bold = this.Bold
-            };
+            return (StyleInfo)MemberwiseClone();
         }
 
         private Brush ConsoleColorToBrush(ConsoleColor color)
@@ -401,7 +479,7 @@ namespace PT200Emulator.Core.Emulator
                 ConsoleColor.Gray => Brushes.Gray,
                 ConsoleColor.DarkGray => Brushes.DarkGray,
                 ConsoleColor.Blue => Brushes.Blue,
-                ConsoleColor.Green => Brushes.Green,
+                ConsoleColor.Green => Brushes.LimeGreen,
                 ConsoleColor.Cyan => Brushes.Cyan,
                 ConsoleColor.Red => Brushes.Red,
                 ConsoleColor.Magenta => Brushes.Magenta,
@@ -409,6 +487,47 @@ namespace PT200Emulator.Core.Emulator
                 ConsoleColor.White => Brushes.White,
                 _ => Brushes.Transparent
             };
+        }
+    }
+
+    public class RowLockManager
+    {
+        private readonly HashSet<int> _lockedRows = new();
+        private bool _ignoreLocksTemporarily = false;
+        public IEnumerable<int> GetLockedRows() => _lockedRows.OrderBy(r => r);
+
+        public void Lock(int row) => _lockedRows.Add(row);
+        public void Unlock(int row) => _lockedRows.Remove(row);
+        
+        public void LockSystemLines(int top, int bottom)
+        {
+            for (int i = top; i <= bottom; i++)
+                Lock(i);
+        }
+
+        public bool IsLocked(int row)
+        {
+            if (_ignoreLocksTemporarily) return false;
+            return _lockedRows.Contains(row);
+        }
+
+        public void IgnoreLocksTemporarily()
+        {
+            _ignoreLocksTemporarily = true;
+        }
+
+        public void RestoreLockEnforcement()
+        {
+            _ignoreLocksTemporarily = false;
+        }
+
+        public void LogLockedRows(ILogger logger)
+        {
+            var locked = GetLockedRows().ToList();
+            if (locked.Count == 0)
+                logger.LogDebug("[RowLockManager] Inga låsta rader");
+            else
+                logger.LogDebug($"[RowLockManager] Låsta rader: {string.Join(", ", locked)}");
         }
     }
 }

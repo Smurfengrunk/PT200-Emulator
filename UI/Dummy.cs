@@ -11,7 +11,7 @@ using PT200Emulator.Infrastructure.Networking;
 
 namespace PT200Emulator.DummyImplementations
 {
-    internal class Parser : ITerminalParser
+    internal class Parser
     {
         public event Action<byte[]> OnDcsResponse;
         public event Action<IReadOnlyList<TerminalAction>> ActionsReady = delegate { };

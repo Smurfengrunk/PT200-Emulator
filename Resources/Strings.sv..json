@@ -1,0 +1,8 @@
+{
+    "mode.set": "Sätter läge >{0} ({1})",
+    "mode.reset": "Återställer läge >{0} ({1})",
+    "mode.dump.header": "Aktiva PT200-lägen:",
+    "mode.dump.line": ">{0} {1} – {2}",
+    "mode.status.on": "PÅ",
+    "mode.status.off": "AV"
+}

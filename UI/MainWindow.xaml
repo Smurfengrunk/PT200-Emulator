@@ -92,8 +92,8 @@
                     x:Name="LogLevelCombo"
                     Width="150"
                     Margin="5"
-                    SelectedValuePath="Content">
-
+                    ItemsSource="{Binding LogLevels}"
+                    SelectionChanged="LogLevelCombo_SelectionChanged">
                 </ComboBox>
                 <!--  Visuell indikator  -->
                 <TextBlock

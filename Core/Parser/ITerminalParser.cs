@@ -11,6 +11,8 @@ namespace PT200Emulator.Core.Parser
         event Action<IReadOnlyList<TerminalAction>> ActionsReady;
         event Action<byte[]> OnDcsResponse;
         IScreenBuffer screenBuffer { get; }
+        CsiSequenceHandler _csiHandler { get; }
+        DcsSequenceHandler _dcsHandler { get; }
 
     }
 

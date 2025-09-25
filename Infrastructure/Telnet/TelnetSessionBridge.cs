@@ -2,6 +2,7 @@
 using PT200Emulator.Core.Parser;
 using PT200Emulator.Infrastructure.Logging;
 using System;
+using System.Text;
 
 namespace PT200Emulator.Protocol
 {
@@ -57,6 +58,7 @@ namespace PT200Emulator.Protocol
         private void HandleIncomingBytes(byte[] bytes)
         {
             _log?.Invoke($"[BRIDGE] Feeding {bytes.Length} bytes to parser");
+            this.LogDebug($"[RAW INPUT] Bytes mottagna: {BitConverter.ToString(bytes)}");
             _parser.Feed(bytes);
         }
 
@@ -74,6 +76,7 @@ namespace PT200Emulator.Protocol
         /// </summary>
         public Task SendFromClient(byte[] bytes)
         {
+            this.LogTrace($"[SENDFROMCLIENT] bytes = {Encoding.ASCII.GetString(bytes)}");
             return _sendToServerAsync(bytes);
         }
 

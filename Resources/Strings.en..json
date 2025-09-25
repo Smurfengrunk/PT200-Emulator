@@ -1,0 +1,8 @@
+{
+    "mode.set": "Set mode >{0} ({1})",
+    "mode.reset": "Reset mode >{0} ({1})",
+    "mode.dump.header": "Active PT200 modes:",
+    "mode.dump.line": ">{0} {1} – {2}",
+    "mode.status.on": "ON",
+    "mode.status.off": "OFF"
+}

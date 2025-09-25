@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media;
 using System.Windows;
+using System.Text;
 
 namespace PT200Emulator.Infrastructure.Networking
 {
@@ -101,6 +102,7 @@ namespace PT200Emulator.Infrastructure.Networking
 
         public async Task SendAsync(byte[] data, CancellationToken cancellationToken, string host, int port)
         {
+            this.LogTrace($"[SENDASYNC] data = {Encoding.ASCII.GetString(data)}");
             if (_stream == null) return;
 
             try

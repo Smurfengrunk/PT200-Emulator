@@ -8,11 +8,13 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Windows.Media;
+using static PT200Emulator.Core.Parser.VisualAttributeManager;
 
 namespace PT200Emulator.Core.Parser
 {
     public class TerminalState
     {
+        private VisualAttributeManager visualAttributeManager;
         public enum ScreenFormat
         {
             [Description("80 x 24")]
@@ -120,12 +122,17 @@ namespace PT200Emulator.Core.Parser
             }
         }
 
-        public TerminalState()
+        public GlyphMode GlyphMode { get; set; } = GlyphMode.Normal;
+
+        private readonly CharTableManager _charTableManager;
+
+        public TerminalState(CharTableManager charTableManager, string basePath)
         {
             screenFormat = ScreenFormat.S80x24; // eller default från config
-            ScreenBuffer = new ScreenBuffer(24, 80, DisplayTypeToBrush(Display), Brushes.Black); // första instans
+            ScreenBuffer = new ScreenBuffer(24, 80, DisplayTypeToBrush(Display), Brushes.Black, basePath); // första instans
             Cols = 80;
             Rows = 24;
+            _charTableManager = charTableManager;
         }
 
         public void SetScreenFormat()
@@ -374,6 +381,16 @@ namespace PT200Emulator.Core.Parser
                 ScreenFormat.S132x27 => (132, 27),
                 ScreenFormat.S160x24 => (160, 24),
                 _ => (80, 24)
+            };
+        }
+
+        public char TranslateGlyph(byte code)
+        {
+            return GlyphMode switch
+            {
+                GlyphMode.LineDrawing => _charTableManager.GetGlyphFromTable("G1", code),
+                GlyphMode.BlockDrawing => _charTableManager.GetGlyphFromTable("G1", code), // eller annan tabell
+                _ => _charTableManager.Translate(code)
             };
         }
     }

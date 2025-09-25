@@ -19,7 +19,7 @@ namespace PT200Emulator.Core.Input
         public int BaudRate { get; set; } = 9600;
 
         internal readonly ITerminalParser _parser;
-        private readonly TerminalState state;
+        //private readonly TerminalState state;
         private readonly CommandRouter router;
         internal readonly TerminalState _state;
         public TerminalState.DisplayType DisplayTheme { get; set; }
@@ -48,7 +48,7 @@ namespace PT200Emulator.Core.Input
         {
             _parser.OnDcsResponse += data =>
             {
-                this.LogTrace($"[INITIALIZEASYNC/ONDCSRESPONSE] data = {Encoding.ASCII.GetChars(data)}, Controller = {Controller.GetHashCode()}");
+                this.LogTrace($"[INITIALIZEASYNC/ONDCSRESPONSE] data = {new string(Encoding.ASCII.GetChars(data))}, Controller = {Controller.GetHashCode()}");
                 _ = Controller.SendRawAsync(data)
                     .ContinueWith(t => this.LogError($"Fel vid DCS-sändning: {t.Exception}"),
                                   TaskContinuationOptions.OnlyOnFaulted);
