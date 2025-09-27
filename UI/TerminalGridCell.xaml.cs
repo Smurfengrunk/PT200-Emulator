@@ -1,30 +1,17 @@
 ﻿using PT200Emulator.Core.Emulator;
-using System;
-using System.Collections.Generic;
 using System.ComponentModel;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
 
 namespace PT200Emulator.UI
 {
-    /// <summary>
-    /// Interaction logic for TerminalGridCell.xaml
-    /// </summary>
     public partial class TerminalGridCell : UserControl
     {
         public TerminalGridCell()
         {
+            // Låt cellen vara “passiv” i designern
             if (DesignerProperties.GetIsInDesignMode(this))
                 return;
 
@@ -33,46 +20,54 @@ namespace PT200Emulator.UI
 
         public void SetContent(char character, StyleInfo style)
         {
+            var s = style ?? new StyleInfo();
+
             CellText.Text = character.ToString();
 
-            Brush fg = style.ReverseVideo ? style.Background : style.Foreground;
-            Brush bg = style.ReverseVideo ? style.Foreground : style.Background;
+            Brush fg = s.ReverseVideo ? s.Background : s.Foreground;
+            Brush bg = s.ReverseVideo ? s.Foreground : s.Background;
 
-            CellText.Foreground = fg;
-            CellText.Background = bg;
+            CellText.Foreground = fg ?? Brushes.Lime;
+            CellText.Background = s.Transparent ? Brushes.Transparent : (bg ?? Brushes.Black);
 
-            CellText.FontWeight = style.Bold ? FontWeights.Bold : FontWeights.Normal;
-            CellText.TextDecorations = style.Underline ? TextDecorations.Underline : null;
+            CellText.FontWeight = s.Bold ? FontWeights.Bold : FontWeights.Normal;
 
-            if (style.Blink)
+            // TextDecorations kan inte innehålla både Underline och Strikethrough samtidigt utan sammanslagning
+            if (s.Underline && s.StrikeThrough)
             {
-                var blinkAnimation = new DoubleAnimation
+                var decs = new TextDecorationCollection(TextDecorations.Underline) { TextDecorations.Strikethrough[0] };
+                CellText.TextDecorations = decs;
+            }
+            else if (s.Underline)
+            {
+                CellText.TextDecorations = TextDecorations.Underline;
+            }
+            else if (s.StrikeThrough)
+            {
+                CellText.TextDecorations = TextDecorations.Strikethrough;
+            }
+            else
+            {
+                CellText.TextDecorations = null;
+            }
+
+            if (s.Blink)
+            {
+                var blink = new DoubleAnimation
                 {
                     From = 1.0,
                     To = 0.0,
-                    Duration = TimeSpan.FromMilliseconds(500),
+                    Duration = System.TimeSpan.FromMilliseconds(500),
                     AutoReverse = true,
                     RepeatBehavior = RepeatBehavior.Forever
                 };
-                CellText.BeginAnimation(OpacityProperty, blinkAnimation);
+                CellText.BeginAnimation(OpacityProperty, blink);
             }
             else
             {
                 CellText.BeginAnimation(OpacityProperty, null);
                 CellText.Opacity = 1.0;
             }
-
-            if (style.Transparent)
-            {
-                CellText.Background = Brushes.Transparent;
-            }
-
-            if (style.StrikeThrough)
-            {
-                CellText.TextDecorations = TextDecorations.Strikethrough;
-            }
-
-            // VisualAttributeLock kan hanteras separat om det påverkar interaktivitet eller stilskydd
         }
     }
 }

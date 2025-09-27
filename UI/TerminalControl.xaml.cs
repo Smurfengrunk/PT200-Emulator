@@ -27,12 +27,12 @@ namespace PT200Emulator.UI
 {
     public partial class TerminalControl : UserControl
     {
-        private readonly DispatcherTimer _clockTimer;
-        private readonly DispatcherTimer _speedTimer;
+        private DispatcherTimer _clockTimer;
+        private DispatcherTimer _speedTimer;
         private int _bytesReceivedThisSecond = 0;
         internal UiConfig _uiConfig;
         private FixedUniformGrid _terminalGrid;
-        private Canvas _overlayCanvas;
+        //private Canvas _overlayCanvas;
         private Rectangle _caretVisual;
         private TextBox _inputOverlay;
         private LayeredTerminalHost _host;
@@ -58,7 +58,7 @@ namespace PT200Emulator.UI
         private Brush _defaultBackground = Brushes.Black;
         private FontFamily _defaultFontFamily = new FontFamily("Consolas");
         private int _defaultFontSize = 16;
-        private bool _layoutMeasured = false;
+        //private bool _layoutMeasured = false;
 
         //private string _savedStatusText;
         //private bool _inSystemLine = false;
@@ -71,31 +71,57 @@ namespace PT200Emulator.UI
         {
             InitializeComponent();
 
-            // Hindra att designern kör runtime-logik
+            // Viktigt: lämna direkt i design-mode för att undvika XDG-fel
             if (DesignerProperties.GetIsInDesignMode(this))
                 return;
         }
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
         {
-            // Skapa och injicera terminalhosten vid körning
-            _host = new LayeredTerminalHost(_state.ScreenBuffer.CurrentStyle);
+            // Kör ingen runtime-init i designern
+            if (DesignerProperties.GetIsInDesignMode(this))
+                return;
+
+            // Skydda mot null i runtime-kontext (om appen laddar långsamt)
+            var style = _state?.ScreenBuffer?.CurrentStyle ?? new StyleInfo();
+
+            _host = new LayeredTerminalHost(style);
+            _host.TerminalGrid.InitCells(); // skapa celler endast vid runtime
+            _terminalGrid = _host.TerminalGrid;
+
             TerminalHost.Children.Add(_host);
 
-            // Koppla LayoutUpdated för overlaymått och fokus
+            // Synka overlaymått och fokus när terminalen har faktiska mått
             _host.LayoutUpdated += (_, __) =>
             {
-                if (_host.TerminalGrid.ActualWidth > 0 && _host.TerminalGrid.ActualHeight > 0)
+                var w = _host.TerminalGrid.ActualWidth;
+                var h = _host.TerminalGrid.ActualHeight;
+                if (w > 0 && h > 0)
                 {
-                    _host.InputOverlay.Width = _host.TerminalGrid.ActualWidth;
-                    _host.InputOverlay.Height = _host.TerminalGrid.ActualHeight;
+                    _host.InputOverlay.Width = w;
+                    _host.InputOverlay.Height = h;
 
                     Keyboard.Focus(_host.InputOverlay);
                     _host.InputOverlay.Focus();
                 }
             };
-        }
+            _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _clockTimer.Tick += (s, e) =>
+            {
+                ClockTextBlock.Text = DateTime.Now.ToString("HH:mm");
+            };
+            _clockTimer.Start();
 
+            _speedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _speedTimer.Tick += (s, e) =>
+            {
+                SpeedTextBlock.Text = $"| ↩ {_bytesReceivedThisSecond} B/s";
+                _bytesReceivedThisSecond = 0;
+            };
+            _speedTimer.Start();
+            _caretVisual = _host.CaretVisual;
+            _inputOverlay = _host.InputOverlay;
+        }
 
         public void InitializeInput(InputController controller, IInputMapper mapper = null)
         {
@@ -158,100 +184,6 @@ namespace PT200Emulator.UI
                 }
             }
         }
-
-        /*private async void UserControl_Loaded(object sender, RoutedEventArgs e)
-        {
-            this.LogDebug("UserControl_Loaded called");
-            _host = new LayeredTerminalHost(_state.ScreenBuffer.CurrentStyle);
-            //TerminalHost.Children.Add(_host);
-
-            // Om sessionen redan är satt av MainWindow, initiera den nu
-            if (_session != null)
-            {
-                await InitializeSession(_session, _uiConfig);
-            }
-            else
-            {
-                this.LogDebug("[USERCONTROL_LOADED] Session not initialized");
-            }
-
-            this.LogDebug("Reusing existing FixedUniformGrid");
-            _terminalGrid = _host.TerminalGrid;
-
-            _overlayCanvas = _host.OverlayCanvas;
-            _caretVisual = _host.CaretVisual;
-            _inputOverlay = _host.InputOverlay;
-            _caretVisual.Visibility = Visibility.Visible;
-
-            //TerminalHost.Children.Add(_host);
-
-            _defaultForeground = Brushes.LimeGreen;
-            _defaultBackground = Brushes.Black;
-
-            if (_session != null)
-            {
-                var buffer = _session.ScreenBuffer;
-                var cells = _host.TerminalGrid.Children.OfType<TerminalGridCell>().ToArray();
-
-                for (int r = 0; r < buffer.Rows; r++)
-                {
-                    for (int c = 0; c < buffer.Cols; c++)
-                    {
-                        int index = r * buffer.Cols + c;
-                        var cell = cells[index];
-
-                        cell.SetContent(' ', _state.ScreenBuffer.CurrentStyle);
-                        TextOptions.SetTextRenderingMode(cell, TextRenderingMode.Aliased);
-                        TextOptions.SetTextFormattingMode(cell, TextFormattingMode.Display);
-                    }
-                }
-
-                TerminalHost.LayoutUpdated += (_, __) =>
-                {
-                    if (!_layoutMeasured && _terminalGrid.ActualHeight > 0 && StatusBarElement.ActualHeight > 0)
-                    {
-                        _layoutMeasured = true;
-                        var cellHeight = _cells[0, 0].ActualHeight;
-                        _terminalGrid.MaxHeight = cellHeight * _state.Rows;
-                        ApplyScreenFormatChange(_state);
-                        SafeRender();
-                        this.LogDebug($"[LayoutUpdated - if 1] _terminalGrid Actual: {_terminalGrid.ActualHeight}, Desired: {_terminalGrid.DesiredSize.Height}, Layout measured: {_layoutMeasured}");
-                    }
-
-                    if (_overlayCanvas.Width != _terminalGrid.ActualWidth ||
-                        _overlayCanvas.Height != _terminalGrid.ActualHeight)
-                    {
-                        _overlayCanvas.Width = _terminalGrid.ActualWidth;
-                        _overlayCanvas.Height = _terminalGrid.ActualHeight;
-                        this.LogDebug($"[LayoutUpdated - if 2] _terminalGrid Actual: {_terminalGrid.ActualHeight}, Desired: {_terminalGrid.DesiredSize.Height}, Layout measured: {_layoutMeasured}");
-                    }
-
-                    if (_pendingCaret.HasValue)
-                    {
-                        var (row, col) = _pendingCaret.Value;
-                        UpdateCaretPosition(row, col, _state.ScreenBuffer.CurrentStyle.Foreground);
-                        this.LogDebug($"[LayoutUpdated - if 3] _terminalGrid Actual: {_terminalGrid.ActualHeight}, Desired: {_terminalGrid.DesiredSize.Height}, Layout measured: {_layoutMeasured}");
-                        _pendingCaret = null;
-                    }
-
-                    ApplyScreenFormatChange(_state);
-                    SafeRender();
-                    // Placera statusrad längst ned
-                    StatusBarElement.SetValue(Canvas.TopProperty,
-                        _terminalGrid.ActualHeight - StatusBarElement.ActualHeight);
-
-                    FocusInput();
-                };
-                this.LogDebug("TerminalControl USerControl_Loaded after LayoutUpdated hookup");
-                FocusInput();
-                UpdateLockIndicators();
-                this.LogTrace("[USERCONTROL_LOADED] Session initialized");
-            }
-            else
-            {
-                this.LogDebug("[USERCONTROL_LOADED] Session not initialized");
-            }
-        }*/
 
         public void FocusInput()
         {
@@ -719,7 +651,7 @@ namespace PT200Emulator.UI
 
             _caretVisual.Visibility = Visibility.Visible;
             _caretVisual.Fill = foreground ?? Brushes.LimeGreen;
-            Panel.SetZIndex(_overlayCanvas, 1000);
+            //Panel.SetZIndex(_overlayCanvas, 1000);
         }
 
 

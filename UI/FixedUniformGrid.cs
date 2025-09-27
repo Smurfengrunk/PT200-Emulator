@@ -1,23 +1,14 @@
 ﻿using PT200Emulator.Core.Emulator;
-using PT200Emulator.Infrastructure.Logging;
-using System;
-using System.Collections.Generic;
 using System.ComponentModel;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 
 namespace PT200Emulator.UI
 {
     public class FixedUniformGrid : Panel
     {
-        public int Rows { get; set; } = 24;
-        public int Columns { get; set; } = 80;
-        public Grid TerminalGrid { get; } = new Grid();
-
+        public int Rows { get; set; }
+        public int Columns { get; set; }
         private readonly StyleInfo _defaultStyle;
 
         public FixedUniformGrid(int rows, int cols, StyleInfo defaultStyle)
@@ -25,26 +16,25 @@ namespace PT200Emulator.UI
             if (DesignerProperties.GetIsInDesignMode(this))
                 return;
 
-            if (defaultStyle == null)
-            {
-                this.LogWarning("Default style is null, using a fallback style.");
-                defaultStyle = new StyleInfo();
-            }
             Rows = rows;
             Columns = cols;
-            _defaultStyle = defaultStyle.Clone();
+            _defaultStyle = (defaultStyle ?? new StyleInfo()).Clone();
 
+            SizeChanged += (s, e) => InvalidateMeasure();
+        }
+
+        public void InitCells()
+        {
+            Children.Clear();
             for (int row = 0; row < Rows; row++)
             {
                 for (int col = 0; col < Columns; col++)
                 {
                     var cell = new TerminalGridCell();
                     cell.SetContent(' ', _defaultStyle);
-                    Children.Add(cell); // ❗️lägg till i InternalChildren, inte TerminalGrid
+                    Children.Add(cell);
                 }
             }
-
-            SizeChanged += (s, e) => InvalidateMeasure();
         }
 
         protected override Size MeasureOverride(Size availableSize)
@@ -53,12 +43,10 @@ namespace PT200Emulator.UI
 
             if (Children.Count > 0)
             {
-                var first = Children[0];
-                // Use a finite max probe to avoid Infinity
-                first.Measure(new Size(1000, 1000));
-
-                cellW = double.IsInfinity(first.DesiredSize.Width) || double.IsNaN(first.DesiredSize.Width) ? 0 : first.DesiredSize.Width;
-                cellH = double.IsInfinity(first.DesiredSize.Height) || double.IsNaN(first.DesiredSize.Height) ? 0 : first.DesiredSize.Height;
+                var firstCell = Children[0];
+                firstCell.Measure(new Size(1000, 1000));
+                cellW = double.IsInfinity(firstCell.DesiredSize.Width) || double.IsNaN(firstCell.DesiredSize.Width) ? 0 : firstCell.DesiredSize.Width;
+                cellH = double.IsInfinity(firstCell.DesiredSize.Height) || double.IsNaN(firstCell.DesiredSize.Height) ? 0 : firstCell.DesiredSize.Height;
             }
 
             double totalW = cellW * Columns;
@@ -84,7 +72,7 @@ namespace PT200Emulator.UI
             {
                 int row = i / Columns;
                 int col = i % Columns;
-                var rect = new Rect(col * cellW, row * cellH, cellW, cellH);
+                Rect rect = new Rect(col * cellW, row * cellH, cellW, cellH);
                 InternalChildren[i].Arrange(rect);
             }
 

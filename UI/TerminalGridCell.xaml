@@ -1,17 +1,19 @@
 ﻿<UserControl x:Class="PT200Emulator.UI.TerminalGridCell"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             Width="Auto" Height="Auto"
-             Background="Transparent">
-    <Grid>
+             SnapsToDevicePixels="True"
+             UseLayoutRounding="True">
+    <Grid Background="Transparent" Margin="0">
         <TextBlock x:Name="CellText"
+                   Margin="0" Padding="0"
                    Text=" "
+                   TextWrapping="NoWrap"
+                   TextAlignment="Left"
+                   VerticalAlignment="Center"
+                   HorizontalAlignment="Left"
                    FontFamily="Consolas"
                    FontSize="14"
-                   Foreground="LimeGreen"
-                   Background="Black"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Center"
-                   TextAlignment="Center" />
+                   Foreground="Lime"
+                   Background="Black"/>
     </Grid>
 </UserControl>
