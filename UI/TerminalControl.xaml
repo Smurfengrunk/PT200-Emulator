@@ -5,113 +5,46 @@
     Loaded="UserControl_Loaded"
     SnapsToDevicePixels="True"
     UseLayoutRounding="True"
+    VerticalAlignment="Stretch"
     TextOptions.TextFormattingMode="Display"
     TextOptions.TextHintingMode="Fixed"
     TextOptions.TextRenderingMode="Aliased">
-    <Grid>
+
+    <Grid Background="Black">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
+            <!-- Terminalyta -->
+            <RowDefinition Height="*"/>
+            <!-- Statusrad -->
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
 
-        <!--  Utdata-terminal  -->
-        <RichTextBox
-            x:Name="TerminalText"
-            HorizontalAlignment="Stretch"
-            Grid.Row="0"
-            AcceptsReturn="True"
-            AcceptsTab="True"
-            Background="Black"
-            BorderThickness="0"
-            FontFamily="Consolas"
-            FontSize="16"
-            Foreground="LimeGreen"
-            HorizontalScrollBarVisibility="Auto"
-            IsReadOnly="True"
-            VerticalScrollBarVisibility="Auto"
-            Padding="0"
-            VerticalAlignment="Top" />
-        <Rectangle
-            x:Name="CaretVisual"
-            Width="8"
-            Height="2"
-            HorizontalAlignment="Left"
-            VerticalAlignment="Top"
-            Panel.ZIndex="20"
-            Fill="LimeGreen"
-            IsHitTestVisible="False"
-            RenderTransformOrigin="0,0"
-            Visibility="Collapsed" />
-        <!--  Transparent overlay för tangentinmatning  -->
-        <TextBox
-            x:Name="InputOverlay"
-            Grid.Row="0"
-            Panel.ZIndex="10"
-            Background="#01FFFFFF"
-            BorderBrush="Red"
-            BorderThickness="1"
-            Focusable="True"
-            IsHitTestVisible="True"
-            Opacity="10"
-            PreviewKeyDown="InputOverlay_PreviewKeyDown"
-            PreviewTextInput="InputOverlay_PreviewTextInput" />
+        <!-- Terminalyta injiceras i kod -->
+        <Grid x:Name="TerminalHost"
+              Grid.Row="0"
+              ClipToBounds="True"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch"/>
 
-        <!--  Statusrad  -->
-        <StatusBar
-            x:Name="StatusBarElement"
-            Grid.Row="1"
-            Background="LimeGreen"
-            Foreground="Black">
-
-            <!--  Vänsterjusterad statustext  -->
+        <!-- Statusrad -->
+        <StatusBar x:Name="StatusBarElement"
+                   Grid.Row="1"
+                   Background="LimeGreen"
+                   Foreground="Black">
             <StatusBarItem HorizontalAlignment="Left">
-                <TextBlock
-                    x:Name="StatusText"
-                    VerticalAlignment="Center"
-                    Text="⏳ Terminalen laddar..." />
+                <TextBlock x:Name="StatusText"
+                           VerticalAlignment="Center"
+                           Text="⏳ Terminalen laddar..." />
             </StatusBarItem>
-
             <StatusBarItem HorizontalAlignment="Right">
                 <StackPanel Orientation="Horizontal">
-                    <!-- Fält för visualisering av Scroll Lock-->
-                    <TextBlock
-                        x:Name="ScrollLock"
-                        VerticalAlignment="Center"
-                        Foreground="Red"
-                        Background="LimeGreen"
-                        Text="| SCROLL "
-                        ToolTip="Scroll Lock är aktiv" />
-                    <!-- Fält för visualisering av Caps Lock-->
-                    <TextBlock
-                        x:Name="CapsLock"
-                        VerticalAlignment="Center"
-                        Foreground="Purple"
-                        Background="LimeGreen"
-                        Text="| CAPS "
-                        ToolTip="Caps Lock är aktiv" />
-                    <!-- Fält för visualisering av Num Lock-->
-                    <TextBlock
-                        x:Name="NumLock"
-                        VerticalAlignment="Center"
-                        Foreground="Black"
-                        Background="LimeGreen"
-                        Text="| NUM "
-                        ToolTip="Num Lock är aktiv"/>
-                    <!--  Högerjusterad "hastighetsmätare"  -->
-                    <TextBlock
-                        x:Name="SpeedTextBlock"
-                        VerticalAlignment="Center"
-                        Text="| ↩ 0 B/s" />
-
-                    <!--  Högerjusterad klocka  -->
-                    <TextBlock
-                        x:Name="ClockTextBlock"
-                        Margin="5,0"
-                        VerticalAlignment="Center"
-                        Text="{Binding CurrentTime}" />
+                    <TextBlock x:Name="Insert" Foreground="Red" Background="LimeGreen" Text="| OVR" />
+                    <TextBlock x:Name="ScrollLock" Foreground="Red" Background="LimeGreen" Text="| SCROLL " />
+                    <TextBlock x:Name="CapsLock" Foreground="Purple" Background="LimeGreen" Text="| CAPS " />
+                    <TextBlock x:Name="NumLock" Foreground="Black" Background="LimeGreen" Text="| NUM " />
+                    <TextBlock x:Name="SpeedTextBlock" Text="| ↩ 0 B/s" />
+                    <TextBlock x:Name="ClockTextBlock"
+                               Margin="5,0"
+                               Text="{Binding CurrentTime, FallbackValue='--:--'}" />
                 </StackPanel>
             </StatusBarItem>
         </StatusBar>

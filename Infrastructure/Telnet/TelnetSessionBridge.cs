@@ -57,8 +57,8 @@ namespace PT200Emulator.Protocol
 
         private void HandleIncomingBytes(byte[] bytes)
         {
-            _log?.Invoke($"[BRIDGE] Feeding {bytes.Length} bytes to parser");
-            this.LogDebug($"[RAW INPUT] Bytes mottagna: {BitConverter.ToString(bytes)}");
+            this.LogTrace($"[BRIDGE] Feeding {bytes.Length} bytes to parser");
+            this.LogTrace($"[RAW INPUT] Bytes mottagna: {BitConverter.ToString(bytes)}");
             _parser.Feed(bytes);
         }
 
@@ -67,7 +67,7 @@ namespace PT200Emulator.Protocol
         /// </summary>
         public void Feed(byte[] buffer, int length)
         {
-            _log?.Invoke($"[BRIDGE] Feed called - {length} bytes");
+            this.LogTrace($"[BRIDGE] Feed called - {length} bytes");
             _interpreter.Feed(buffer, length);
         }
 

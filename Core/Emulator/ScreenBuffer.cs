@@ -17,7 +17,6 @@ namespace PT200Emulator.Core.Emulator
         private const int TabSize = 8;
 
         private char[,] _chars;
-        private StyleInfo[,] _styles;
 
         public event Action BufferUpdated;
         public event Action<int, int> CursorMoved;
@@ -173,7 +172,6 @@ namespace PT200Emulator.Core.Emulator
             _systemLineBuffer = new ScreenCell[cols];
             if (rows <= 0 || cols <= 0) throw new ArgumentOutOfRangeException();
             _chars = new char[rows, cols];
-            _styles = new StyleInfo[rows, cols];
             var g0path = Path.Combine(basePath, "data", "chartables", "g0.json");
             var g1path = Path.Combine(basePath, "data", "chartables", "g1.json");
             charTableManager = new CharTableManager(g0path, g1path);
@@ -211,18 +209,17 @@ namespace PT200Emulator.Core.Emulator
                     for (int c = 0; c < Math.Min(Cols, cols); c++)
                     {
                         newChars[r, c] = _chars[r, c];
-                        newStyles[r, c] = _styles[r, c];
+                        newStyles[r, c] = _mainBuffer[r, c].Style;
                     }
                 // Kopiera så mycket som får plats från gamla bufferten
                 for (int r = 0; r < rows; r++)
                     for (int c = 0; c < cols; c++)
                     {
                         if (newStyles[r, c] == null)
-                            newStyles[r, c] = new StyleInfo();
+                            _mainBuffer[r, c].Style = new StyleInfo();
                     }
-
+                
                 _chars = newChars;
-                _styles = newStyles;
 
                 CursorRow = Math.Min(CursorRow, rows - 1);
                 CursorCol = Math.Min(CursorCol, cols - 1);
@@ -240,7 +237,7 @@ namespace PT200Emulator.Core.Emulator
         public StyleInfo GetStyle(int row, int col)
         {
             if ((uint)row >= (uint)Rows || (uint)col >= (uint)Cols) return new StyleInfo();
-            return _styles[row, col];
+            return _mainBuffer[row, col].Style;
         }
 
         public void WriteChar(char ch)
@@ -249,7 +246,7 @@ namespace PT200Emulator.Core.Emulator
                 flushTrigger.ForceFlush("Första teckeninmatning – inittext börjar");
             var glyph = charTableManager.Translate((byte)ch);
             textLogger.LogChar(CursorRow, CursorCol, glyph);
-            //this.LogTrace($"[CHAR] Pos=({CursorRow},{CursorCol}), Byte=0x{(byte)ch:X2}, Glyph='{glyph}', Attr=FG:{CurrentStyle.brForeGround}, BG:{CurrentStyle.brBackGround}");
+            //this.LogTrace($"[CHAR] Pos=({CursorRow},{CursorCol}), Byte=0x{(byte)ch:X2}, Glyph='{glyph}', Attr=FG:{CurrentStyle.Foreground}, BG:{CurrentStyle.Background}");
             flushTrigger.OnCharWritten();
             Mutate(() =>
             {
@@ -262,8 +259,8 @@ namespace PT200Emulator.Core.Emulator
                     _systemLineBuffer[CursorCol] = new ScreenCell
                     {
                         Char = ch,
-                        Foreground = CurrentStyle.brBackGround,
-                        Background = CurrentStyle.brForeGround
+                        Foreground = CurrentStyle.Background,
+                        Background = CurrentStyle.Foreground
                     };
 
                     CursorCol++;
@@ -277,12 +274,12 @@ namespace PT200Emulator.Core.Emulator
                     _mainBuffer[CursorRow, CursorCol] = new ScreenCell
                     {
                         Char = ch,
-                        Foreground = CurrentStyle.ReverseVideo ? CurrentStyle.brBackGround : CurrentStyle.brForeGround,
-                        Background = CurrentStyle.ReverseVideo ? CurrentStyle.brForeGround : CurrentStyle.brBackGround
+                        Foreground = CurrentStyle.ReverseVideo ? CurrentStyle.Background : CurrentStyle.Foreground,
+                        Background = CurrentStyle.ReverseVideo ? CurrentStyle.Foreground : CurrentStyle.Background
                     };
 
                     _chars[CursorRow, CursorCol] = ch;
-                    _styles[CursorRow, CursorCol] = CurrentStyle.Clone();
+                    _mainBuffer[CursorRow, CursorCol].Style = CurrentStyle.Clone();
 
                     AdvanceCursor();
                 }
@@ -344,7 +341,7 @@ namespace PT200Emulator.Core.Emulator
                 for (int c = 0; c < Cols; c++)
                 {
                     _chars[r, c] = ' ';
-                    _styles[r, c] = new StyleInfo();
+                    _mainBuffer[r, c].Style = new StyleInfo();
                 }
 
             CursorRow = 0;
@@ -358,7 +355,7 @@ namespace PT200Emulator.Core.Emulator
             for (int c = 0; c < Cols; c++)
             {
                 _chars[row, c] = ' ';
-                _styles[row, c] = new StyleInfo();
+                _mainBuffer[row, c].Style = new StyleInfo();
             }
             MarkDirty();
         }
@@ -387,13 +384,13 @@ namespace PT200Emulator.Core.Emulator
                 for (int c = 0; c < Cols; c++)
                 {
                     _chars[r - 1, c] = _chars[r, c];
-                    _styles[r - 1, c] = _styles[r, c];
+                    _mainBuffer[r - 1, c].Style = _mainBuffer[r, c].Style;
                 }
 
             for (int c = 0; c < Cols; c++)
             {
                 _chars[Rows - 1, c] = ' ';
-                _styles[Rows - 1, c] = new StyleInfo();
+                _mainBuffer[Rows - 1, c].Style = new StyleInfo();
             }
             MarkDirty();
         }
@@ -424,17 +421,14 @@ namespace PT200Emulator.Core.Emulator
 
         public void SetStyle(int row, int col,  StyleInfo style)
         {
-            _styles[row, col] = style;
+            _mainBuffer[row, col].Style = style;
         }
     }
 
     public class StyleInfo
     {
-        public ConsoleColor Foreground { get; set; } = ConsoleColor.Green;
-        public ConsoleColor Background { get; set; } = ConsoleColor.Black;
-
-        public Brush brForeGround => ConsoleColorToBrush(Foreground);
-        public Brush brBackGround => ConsoleColorToBrush(Background);
+        public Brush Foreground { get; set; } = Brushes.LimeGreen;
+        public Brush Background { get; set; } = Brushes.Black;
 
         public bool Blink { get; set; } = false;
         public bool Bold { get; set; } = false;
@@ -449,8 +443,8 @@ namespace PT200Emulator.Core.Emulator
 
         public void Reset()
         {
-            Foreground = ConsoleColor.Gray;
-            Background = ConsoleColor.Black;
+            Foreground = Brushes.LimeGreen;
+            Background = Brushes.Black;
             Blink = false;
             Bold = false;
             Underline = false;
@@ -463,30 +457,6 @@ namespace PT200Emulator.Core.Emulator
         public StyleInfo Clone()
         {
             return (StyleInfo)MemberwiseClone();
-        }
-
-        private Brush ConsoleColorToBrush(ConsoleColor color)
-        {
-            return color switch
-            {
-                ConsoleColor.Black => Brushes.Black,
-                ConsoleColor.DarkBlue => Brushes.DarkBlue,
-                ConsoleColor.DarkGreen => Brushes.DarkGreen,
-                ConsoleColor.DarkCyan => Brushes.DarkCyan,
-                ConsoleColor.DarkRed => Brushes.DarkRed,
-                ConsoleColor.DarkMagenta => Brushes.DarkMagenta,
-                ConsoleColor.DarkYellow => Brushes.Olive,
-                ConsoleColor.Gray => Brushes.Gray,
-                ConsoleColor.DarkGray => Brushes.DarkGray,
-                ConsoleColor.Blue => Brushes.Blue,
-                ConsoleColor.Green => Brushes.LimeGreen,
-                ConsoleColor.Cyan => Brushes.Cyan,
-                ConsoleColor.Red => Brushes.Red,
-                ConsoleColor.Magenta => Brushes.Magenta,
-                ConsoleColor.Yellow => Brushes.Yellow,
-                ConsoleColor.White => Brushes.White,
-                _ => Brushes.Transparent
-            };
         }
     }
 

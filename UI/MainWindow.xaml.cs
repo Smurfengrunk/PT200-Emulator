@@ -182,7 +182,7 @@ namespace PT200Emulator.UI
             }), DispatcherPriority.ApplicationIdle);
         }
 
-        private async void Window_Loaded(object sender, RoutedEventArgs e)
+        private void Window_Loaded(object sender, RoutedEventArgs e)
         {
             this.LogDebug($"[WINDOW_LOADED] Jobbar med TerminalState hashcode {state.GetHashCode()}");
             Terminal.FocusInput();
@@ -196,14 +196,16 @@ namespace PT200Emulator.UI
             // Auto-connect vid start
             localizationProvider = new LocalizationProvider();
             modeManager = new ModeManager(localizationProvider);
-            await ConnectAsync(cfg.Host, cfg.Port);
-            csiHandler = _parser._csiHandler;
-            dcsHandler = _parser._dcsHandler;
+            Terminal.Loaded += async (_, __) =>
+            {
+                await ConnectAsync(cfg.Host, cfg.Port);
+                await Terminal.InitializeSession(session, _uiConfig);
+            };
 
             LogTerminalHealth();
             // Event från DCS-hanteraren
             // Efter att parser och session är skapade i Connect() eller direkt efter Connect() i Window_Loaded:
-            dcsHandler = new DcsSequenceHandler(state, System.IO.Path.Combine(basePath, "Data", "DcsBitGroups.json"));
+            if (dcsHandler == null) dcsHandler = new DcsSequenceHandler(state, System.IO.Path.Combine(basePath, "Data", "DcsBitGroups.json"));
 
             // Koppla events
             dcsHandler.OnStatusUpdate += msg =>
@@ -332,6 +334,8 @@ namespace PT200Emulator.UI
                 _parser = new TerminalParser(dataPathProvider, state, _inputController, modeManager, Terminal);
                 session = new TerminalSession(_inputController, _inputMapper, basePath, state, _parser);
                 await Terminal.InitializeSession(session, _uiConfig);
+                csiHandler = _parser._csiHandler;
+                dcsHandler = _parser._dcsHandler;
 
                 // 4) Priming render och sanity-check
                 var count = state.ScreenBuffer.GetBufferUpdatedHandlerCount();
@@ -513,13 +517,8 @@ namespace PT200Emulator.UI
 
             // Koppla in TerminalState till TerminalControl
             Terminal.SetTerminalState(state);
-
-            // Initiera layout och rendering
-            Terminal.InitDocument(state.ScreenBuffer);
-            Terminal.AdjustTerminalWidth(state.ScreenBuffer);
-            Terminal.AdjustTerminalHeight(state.ScreenBuffer);
-            Terminal.RenderFromBuffer(state.ScreenBuffer);
-
+            Terminal._session = session; // eller via en setter
+            Terminal._uiConfig = _uiConfig;
             // Justera fönsterstorlek
             MainWindowControl.Width = state.Cols * 8 + 40;
             MainWindowControl.Height = state.Rows * 18 + 60;

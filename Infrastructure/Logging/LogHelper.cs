@@ -75,16 +75,17 @@ namespace PT200Emulator.Infrastructure.Logging
 
         public static ILogger GetLogger(string category)
         {
-            if (_factory == null) return new NullLogger(category);
+            ILogger primary = new NullLogger(category);
+            //if (_factory == null) primary = new NullLogger(category);
 
             if (!_loggers.TryGetValue(category, out var logger))
             {
-                var primary = _factory.CreateLogger(category);
-                logger = new CompositeLogger(primary, category);
-                _loggers[category] = logger;
+                primary = _factory.CreateLogger(category);
+                //logger = new CompositeLogger(primary, category);
+                _loggers[category] = primary;
             }
 
-            return logger;
+            return primary;
         }
 
         public static void LogDebug(string category, string messageKey)

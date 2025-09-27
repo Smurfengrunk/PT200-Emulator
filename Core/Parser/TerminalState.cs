@@ -14,7 +14,6 @@ namespace PT200Emulator.Core.Parser
 {
     public class TerminalState
     {
-        private VisualAttributeManager visualAttributeManager;
         public enum ScreenFormat
         {
             [Description("80 x 24")]

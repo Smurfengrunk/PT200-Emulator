@@ -16,7 +16,7 @@ namespace PT200Emulator.Infrastructure.Logging
             var factory = LoggerFactory.Create(builder =>
             {
                 builder.AddProvider(new CountingLoggerProvider()); // först!
-                //builder.AddProvider(new ColorConsoleLoggerProvider()); // vår färgade konsol
+                builder.AddProvider(new ColorConsoleLoggerProvider()); // vår färgade konsol
                 builder.AddDebug(); // VS Debug Output
                 builder.AddFilter((category, level) => level >= _currentLevel);
             });
